@@ -12,6 +12,8 @@
     "desktop:dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1 --port 5175 --strictPort\" \"wait-on http://127.0.0.1:5175 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron .\"",
     "package:win": "npm run build:desktop && electron-builder --win nsis",
     "test:reading-settings": "npm run build:electron && node --test tests/reading-settings.test.mjs",
+    "test:library-root": "npm run build:electron && node --test tests/library-root.test.mjs",
+    "test:build-assets": "node --test tests/build-assets.test.mjs",
     "lint": "oxlint",
     "test:collection-export": "npm run build:electron && node --test tests/collection-export.test.mjs",
     "test:collection-import": "npm run build:electron && node --test tests/collection-import.test.mjs",

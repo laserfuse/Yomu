@@ -23,12 +23,14 @@ De l’intelligence artificielle a été utilisée lors du développement de ce 
 
 ## Prise en main
 
-1. Lance Yomu et choisis le dossier où stocker ta bibliothèque.
+1. Lance Yomu : une bibliothèque est créée automatiquement dans les données de l’application.
 2. Crée une collection et choisis son type : **Manga** ou **Manhwa**.
 3. Ouvre la collection, clique sur **Ajouter des chapitres**, puis choisis leur langue et les fichiers à importer.
 4. Sélectionne un chapitre pour commencer la lecture.
 
 Les fichiers importés sont copiés dans ta bibliothèque : les originaux ne sont pas modifiés. Tu peux consulter ou changer le dossier de bibliothèque dans les paramètres ; le changer ne déplace pas les collections existantes.
+
+Par défaut, la bibliothèque se trouve dans le sous-dossier `Bibliotheque` du dossier de données de Yomu, généralement sous `%APPDATA%\Yomu` sur Windows. Le chemin exact est affiché dans les paramètres, avec un bouton pour ouvrir le dossier. Si tu utilisais déjà une bibliothèque, Yomu conserve son emplacement. Si ce dossier devient introuvable, reconnecte-le ou sélectionne un autre dossier.
 
 > **Attention :** supprimer une collection supprime définitivement son dossier et tous les fichiers qu’il contient. Les fichiers d’origine situés ailleurs ne sont pas touchés.
 
@@ -63,12 +65,15 @@ npm.cmd run desktop:dev
 ```
 
 Cette commande compile la partie Electron, démarre le serveur de développement et ouvre Yomu.
+La version de développement utilise son profil habituel (`%APPDATA%\yomu` sur Windows), où son dossier de bibliothèque personnalisé est enregistré. L’application installée utilise un profil distinct (`%APPDATA%\yomu-installed`) et crée sa propre bibliothèque par défaut.
 
 ### Vérifications
 
 ```powershell
 npm.cmd run build:desktop
 npm.cmd run lint
+npm.cmd run test:build-assets
+npm.cmd run test:library-root
 npm.cmd run test:reading-settings
 npm.cmd run test:collection-export
 npm.cmd run test:collection-import

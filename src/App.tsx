@@ -743,9 +743,10 @@ function App() {
       <main className="folder-setup">
         <div className="folder-setup-card">
           <div className="folder-setup-mark"><BookOpen size={24} /></div>
-          <span className="eyebrow">BIENVENUE DANS YOMU</span>
+          <span className="eyebrow">BIBLIOTHÈQUE INDISPONIBLE</span>
           <h1>Choisis ton dossier de bibliothèque.</h1>
-          <p>Yomu y créera un dossier par collection, avec sa couverture, ses chapitres et les informations de lecture.</p>
+          <p>Le dossier enregistré est introuvable. Reconnecte-le ou choisis un autre dossier ; les collections existantes ne seront pas déplacées.</p>
+          {error && <p className="dialog-error" role="alert">{error}</p>}
           <button className="button-primary" onClick={() => void chooseLibraryFolder()}><Plus size={17} /> Choisir un dossier sur mon PC</button>
           <span className="folder-setup-note">Tes anciennes données du navigateur ne seront pas importées.</span>
         </div>

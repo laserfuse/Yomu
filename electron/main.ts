@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { exportCollectionArchive } from './collection-export.js'
 import { importCollectionArchive } from './collection-import.js'
 import { readLockedPdfZoom, writeLockedPdfZoom } from './reading-settings.js'
+import { initializeLibraryRoot, saveLibraryRoot } from './library-root.js'
 
 type CollectionKind = 'Manga' | 'Manhwa'
 type CollectionStatus = 'to-read' | 'reading' | 'paused' | 'completed'
@@ -45,6 +46,9 @@ interface CollectionDirectory {
 }
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url))
+if (app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('appData'), `${app.getName()}-installed`))
+}
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 const IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
 let libraryRoot: string | null = null
@@ -167,10 +171,11 @@ async function chooseLibraryRoot(): Promise<string | null> {
     ? await dialog.showOpenDialog(mainWindow, options)
     : await dialog.showOpenDialog(options)
   if (result.canceled || !result.filePaths[0]) return null
-  libraryRoot = path.resolve(result.filePaths[0])
-  await mkdir(libraryRoot, { recursive: true })
-  await writeJson(settingsPath, { libraryRoot })
-  return libraryRoot
+  const selectedRoot = path.resolve(result.filePaths[0])
+  await mkdir(selectedRoot, { recursive: true })
+  await saveLibraryRoot(settingsPath, selectedRoot)
+  libraryRoot = selectedRoot
+  return selectedRoot
 }
 
 async function saveCollection(
@@ -424,19 +429,7 @@ async function createWindow() {
 }
 
 async function initialize() {
-  try {
-    const settings = JSON.parse(await readFile(settingsPath, 'utf8')) as { libraryRoot?: unknown }
-    if (typeof settings.libraryRoot === 'string') {
-      try {
-        await stat(settings.libraryRoot)
-        libraryRoot = settings.libraryRoot
-      } catch (reason) {
-        if (!(isRecord(reason) && reason.code === 'ENOENT')) throw reason
-      }
-    }
-  } catch (reason) {
-    if (!(isRecord(reason) && reason.code === 'ENOENT')) throw reason
-  }
+  libraryRoot = await initializeLibraryRoot(app.getPath('userData'))
   registerHandlers()
   await createWindow()
 }
