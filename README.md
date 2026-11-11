@@ -9,6 +9,10 @@
 
 Yomu est une application Windows qui permet de ranger et de lire tes mangas et manhwas depuis un dossier local. Tes fichiers restent sur ton ordinateur : aucune synchronisation entre appareils n’est proposée.
 
+## Licence
+
+Le contenu original de ce dépôt est sous licence [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Cette licence n’inclut pas les dépendances tierces ni les fichiers personnels importés dans Yomu.
+
 ## Utilisation de l’IA
 
 De l’intelligence artificielle a été utilisée lors du développement de ce projet. Si cela vous dérange ou vous empêche d’utiliser cet outil, j’en suis désolé.
