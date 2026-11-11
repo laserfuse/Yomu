@@ -1,0 +1,64 @@
+{
+  "name": "yomu",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/copy-electron-assets.mjs",
+    "build:desktop": "npm run build && npm run build:electron",
+    "desktop:dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1 --port 5175 --strictPort\" \"wait-on http://127.0.0.1:5175 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron .\"",
+    "package:win": "npm run build:desktop && electron-builder --win nsis",
+    "test:reading-settings": "npm run build:electron && node --test tests/reading-settings.test.mjs",
+    "lint": "oxlint",
+    "test:collection-export": "npm run build:electron && node --test tests/collection-export.test.mjs",
+    "test:collection-import": "npm run build:electron && node --test tests/collection-import.test.mjs",
+    "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.yomu.reader",
+    "productName": "Yomu",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.2",
+    "lucide-react": "^1.72.0",
+    "pdfjs-dist": "^6.5.438",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "yauzl": "^3.4.0"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "^0.9.12",
+    "minimatch@>=7 <11": "^11.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/yauzl": "^3.4.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
+    "oxlint": "^1.90.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.6",
+    "wait-on": "^9.0.3"
+  }
+}
