@@ -1079,17 +1079,24 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
   border-radius: 8px;
   background: #fff;
 }
-.settings-version-card { grid-template-columns: minmax(0, 1fr); margin-top: 20px; }
+.settings-info-card { grid-template-columns: minmax(0, 1fr); margin-top: 20px; }
 .settings-github { grid-column: 1 / -1; justify-self: start; }
-.settings-update-toggle { display: flex; align-items: center; gap: 8px; color: #536057; font-size: 11px; }
+.settings-updates { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.settings-update-heading, .settings-update-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.settings-update-heading strong { color: #344139; font-size: 13px; }
+.settings-update-preference .settings-version { margin-left: auto; color: #768279; font: 10px/1.6 'Segoe UI', sans-serif; }
+.settings-update-status-text, .settings-update-preference-copy > span { color: #768279; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.settings-update-status-text { flex: 1 1 180px; }
+.settings-update-preference { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; padding-top: 14px; border-top: 1px solid #e6ebe7; }
+.settings-update-preference-copy { display: grid; gap: 6px; }
+.settings-update-toggle { display: flex; align-items: center; gap: 8px; color: #536057; font-size: 11px; font-weight: 600; }
 .settings-update-toggle input { accent-color: #48765a; }
-.settings-update-actions { display: grid; align-content: start; gap: 8px; }
+.settings-update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .settings-update-actions button:disabled { cursor: not-allowed; opacity: .6; }
 .settings-card-copy { display: grid; min-width: 0; gap: 7px; }
 .settings-card-copy strong { color: #344139; font-size: 13px; }
 .settings-card-copy > span, .settings-note { color: #768279; font-size: 10px; line-height: 1.6; }
 .settings-card-copy code { overflow-wrap: anywhere; color: #536057; font: 10px/1.6 'Segoe UI', sans-serif; }
-.settings-card-copy .settings-version { justify-self: start; padding: 6px 9px; border: 1px solid #e3e9e4; border-radius: 5px; background: #f7faf7; font-size: 11px; font-weight: 600; }
 .settings-card > .button-secondary { align-self: start; }
 .settings-open-folder { grid-column: 2; grid-row: 2; }
 .settings-note { grid-column: 1 / -1; padding-top: 12px; border-top: 1px solid #e6ebe7; }

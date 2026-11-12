@@ -901,31 +901,22 @@ function App() {
           {isSettingsOpen ? (
             <section className="settings-page">
               <h1>Paramètres</h1>
-              <div className="settings-card settings-version-card">
+              <div className="settings-card settings-info-card">
                 <div className="settings-card-copy">
                   <strong>Informations</strong>
                   <span>Yomu est une application pour organiser et lire tes mangas et manhwas directement sur ton PC.</span>
                   <span>Créé par laserfuse</span>
-                  <code className="settings-version" aria-label={`Version de l’application : v${updateState?.version ?? packageVersion}`}>v{updateState?.version ?? packageVersion}</code>
                 </div>
                 <button className="button-secondary settings-github" onClick={() => void openGitHub()}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={siGithub.path} /></svg> Voir le projet sur GitHub
                 </button>
               </div>
               <div className="settings-card settings-updates">
-                <div className="settings-card-copy">
+                <div className="settings-update-heading">
                   <strong>Mises à jour</strong>
-                  <span>Vérifier sur GitHub au démarrage. Aucun téléchargement ni installation sans ton accord.</span>
-                  <label className="settings-update-toggle">
-                    <input type="checkbox" checked={updateState?.automatic ?? false}
-                      disabled={!updateState?.supported || updateActionPending}
-                      onChange={(event) => {
-                        const automatic = event.target.checked
-                        if (window.yomu) void updateAction(() => window.yomu!.setAutomaticUpdates(automatic))
-                      }} />
-                    Vérification automatique
-                  </label>
-                  <span role={updateState?.phase === 'error' ? 'alert' : 'status'}>
+                </div>
+                <div className="settings-update-status">
+                  <span className="settings-update-status-text" role={updateState?.phase === 'error' ? 'alert' : 'status'}>
                     {!updateState && 'Chargement des informations de mise à jour…'}
                     {updateState?.phase === 'unsupported' && 'Disponible uniquement dans l’application Windows installée.'}
                     {updateState?.phase === 'idle' && 'Aucune vérification effectuée.'}
@@ -936,14 +927,29 @@ function App() {
                     {updateState?.phase === 'downloaded' && `Version ${updateState.availableVersion} prête à être installée.`}
                     {updateState?.phase === 'error' && `Impossible de mettre à jour Yomu : ${updateState.message}`}
                   </span>
+                  <div className="settings-update-actions">
+                    <button className="button-secondary" disabled={!updateState?.supported || updateState.phase === 'checking' || updateState.phase === 'downloading' || updateState.phase === 'downloaded' || updateActionPending}
+                      onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.checkForUpdates()) }}>Vérifier les mises à jour</button>
+                    {updateState?.phase === 'available' && <button className="button-primary" disabled={updateActionPending}
+                      onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.downloadUpdate()) }}>Télécharger la mise à jour</button>}
+                    {updateState?.phase === 'downloaded' && <button className="button-primary" disabled={updateActionPending}
+                      onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.installUpdate()) }}>Installer et redémarrer</button>}
+                  </div>
                 </div>
-                <div className="settings-update-actions">
-                  <button className="button-secondary" disabled={!updateState?.supported || updateState.phase === 'checking' || updateState.phase === 'downloading' || updateState.phase === 'downloaded' || updateActionPending}
-                    onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.checkForUpdates()) }}>Vérifier les mises à jour</button>
-                  {updateState?.phase === 'available' && <button className="button-primary" disabled={updateActionPending}
-                    onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.downloadUpdate()) }}>Télécharger la mise à jour</button>}
-                  {updateState?.phase === 'downloaded' && <button className="button-primary" disabled={updateActionPending}
-                    onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.installUpdate()) }}>Installer et redémarrer</button>}
+                <div className="settings-update-preference">
+                  <div className="settings-update-preference-copy">
+                    <label className="settings-update-toggle">
+                      <input type="checkbox" checked={updateState?.automatic ?? false}
+                        disabled={!updateState?.supported || updateActionPending}
+                        onChange={(event) => {
+                          const automatic = event.target.checked
+                          if (window.yomu) void updateAction(() => window.yomu!.setAutomaticUpdates(automatic))
+                        }} />
+                      Vérification automatique au démarrage
+                    </label>
+                    <span>Le téléchargement et l’installation nécessitent toujours ton accord.</span>
+                  </div>
+                  <code className="settings-version">Version actuelle : v{updateState?.version ?? packageVersion}</code>
                 </div>
               </div>
               <div className="settings-card">
