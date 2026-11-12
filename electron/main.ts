@@ -6,8 +6,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportCollectionArchive } from './collection-export.js'
 import { importCollectionArchive } from './collection-import.js'
+import { withCollectionWriteLock } from './collection-lock.js'
 import { readLockedPdfZoom, writeLockedPdfZoom } from './reading-settings.js'
 import { initializeLibraryRoot, saveLibraryRoot } from './library-root.js'
+import { validReadingPosition } from './reading-position.js'
+import type { ReadingPosition } from './reading-position.js'
+import electronUpdater from 'electron-updater'
+import { UpdateManager } from './updates.js'
 
 type CollectionKind = 'Manga' | 'Manhwa'
 type CollectionStatus = 'to-read' | 'reading' | 'paused' | 'completed'
@@ -38,6 +43,7 @@ interface BookRecord {
   addedAt: number
   lastOpenedAt: number | null
   progress: number
+  readingPosition?: ReadingPosition
 }
 
 interface CollectionDirectory {
@@ -82,7 +88,8 @@ function validBook(value: unknown): value is BookRecord {
     && typeof value.size === 'number'
     && typeof value.addedAt === 'number'
     && (typeof value.lastOpenedAt === 'number' || value.lastOpenedAt === null)
-    && typeof value.progress === 'number'
+    && typeof value.progress === 'number' && Number.isFinite(value.progress) && value.progress >= 0 && value.progress <= 100
+    && validReadingPosition(value.readingPosition, value.format)
 }
 
 function requireRoot(): string {
@@ -184,6 +191,7 @@ async function saveCollection(
   coverName: string | null,
   removeCover: boolean,
 ): Promise<CollectionRecord> {
+  return withCollectionWriteLock(input.id, async () => {
   if (!input.title.trim()) throw new Error('Le titre de la collection est obligatoire.')
   const existingFolder = input.folderName || undefined
   const previous = existingFolder ? await readCollectionDirectory(existingFolder) : null
@@ -235,6 +243,7 @@ async function saveCollection(
     await rm(safePath(previous.collection.coverPath), { force: true })
   }
   return finalCollection
+  })
 }
 
 async function addChapters(collectionId: string, language: ChapterLanguage): Promise<BookRecord[]> {
@@ -252,46 +261,74 @@ async function addChapters(collectionId: string, language: ChapterLanguage): Pro
     : await dialog.showOpenDialog(options)
   if (result.canceled || result.filePaths.length === 0) return []
 
-  const folderName = collection.folderName
-  const chaptersDirectory = safePath(path.join(folderName, 'Chapitres'))
-  await mkdir(chaptersDirectory, { recursive: true })
-  const books = library.books.filter((book) => book.collectionId === collectionId)
-  const imported: BookRecord[] = []
+  return withCollectionWriteLock(collectionId, async () => {
+    const latestLibrary = await loadLibrary()
+    const latestCollection = latestLibrary.collections.find((entry) => entry.id === collectionId)
+    if (!latestCollection) throw new Error('Cette collection est introuvable.')
+    const chaptersDirectory = safePath(path.join(latestCollection.folderName, 'Chapitres'))
+    await mkdir(chaptersDirectory, { recursive: true })
+    const imported: BookRecord[] = []
 
-  for (const sourcePath of result.filePaths) {
-    const sourceName = path.basename(sourcePath)
-    const extension = path.extname(sourceName).toLowerCase()
-    const format = extension === '.pdf' ? 'PDF' : extension === '.cbz' ? 'CBZ' : extension === '.epub' ? 'EPUB' : null
-    if (!format) continue
-    const id = randomUUID()
-    const relativePath = path.join(folderName, 'Chapitres', `${id}${extension}`)
-    await copyFile(sourcePath, safePath(relativePath))
-    const fileStat = await stat(safePath(relativePath))
-    const { title, chapter } = parseChapterTitle(sourceName)
-    imported.push({
-      id,
-      collectionId,
-      title,
-      series: collection.title,
-      chapter,
-      language,
-      format,
-      fileName: sourceName,
-      relativePath,
-      size: fileStat.size,
-      addedAt: Date.now(),
-      lastOpenedAt: null,
-      progress: 0,
-    })
-  }
+    for (const sourcePath of result.filePaths) {
+      const sourceName = path.basename(sourcePath)
+      const extension = path.extname(sourceName).toLowerCase()
+      const format = extension === '.pdf' ? 'PDF' : extension === '.cbz' ? 'CBZ' : extension === '.epub' ? 'EPUB' : null
+      if (!format) continue
+      const id = randomUUID()
+      const relativePath = path.join(latestCollection.folderName, 'Chapitres', `${id}${extension}`)
+      await copyFile(sourcePath, safePath(relativePath))
+      const fileStat = await stat(safePath(relativePath))
+      const { title, chapter } = parseChapterTitle(sourceName)
+      imported.push({
+        id,
+        collectionId,
+        title,
+        series: latestCollection.title,
+        chapter,
+        language,
+        format,
+        fileName: sourceName,
+        relativePath,
+        size: fileStat.size,
+        addedAt: Date.now(),
+        lastOpenedAt: null,
+        progress: 0,
+      })
+    }
 
-  await saveCollectionDirectory({ collection, books: [...books, ...imported] })
-  return imported
+    const collectionDirectory = await readCollectionDirectory(latestCollection.folderName)
+    if (!collectionDirectory) throw new Error('Le dossier de cette collection est introuvable.')
+    await saveCollectionDirectory({ collection: latestCollection, books: [...collectionDirectory.books, ...imported] })
+    return imported
+  })
 }
 
 let mainWindow: BrowserWindow | null = null
+const { autoUpdater } = electronUpdater
+autoUpdater.autoDownload = false
+autoUpdater.autoInstallOnAppQuit = false
+const updates = new UpdateManager(
+  autoUpdater,
+  path.join(app.getPath('userData'), 'updates.json'),
+  app.getVersion(),
+  app.isPackaged && process.platform === 'win32',
+  (state) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:state', state) },
+)
+autoUpdater.on('error', (reason) => updates.reportError(reason))
+autoUpdater.on('download-progress', (progress) => updates.progress(progress.percent))
 
 function registerHandlers() {
+  ipcMain.handle('app:open-github', () => shell.openExternal('https://github.com/laserfuse/Yomu'))
+  ipcMain.handle('updates:get', () => updates.snapshot())
+  ipcMain.handle('updates:set-automatic', async (_event, automatic: unknown) => {
+    if (typeof automatic !== 'boolean') throw new Error('Le réglage de mise à jour est invalide.')
+    await updates.setAutomatic(automatic)
+    const phase = updates.snapshot().phase
+    if (automatic && phase !== 'downloaded' && phase !== 'checking' && phase !== 'downloading') await updates.check()
+  })
+  ipcMain.handle('updates:check', () => updates.check())
+  ipcMain.handle('updates:download', () => updates.download())
+  ipcMain.handle('updates:install', () => updates.install())
   ipcMain.handle('library:get-root', () => libraryRoot)
   ipcMain.handle('library:choose-root', () => chooseLibraryRoot())
   ipcMain.handle('library:open-root', async () => {
@@ -365,10 +402,12 @@ function registerHandlers() {
   })
   ipcMain.handle('library:delete-collection', async (_event, id: unknown) => {
     if (typeof id !== 'string') throw new Error('Identifiant de collection invalide.')
-    const library = await loadLibrary()
-    const collection = library.collections.find((entry) => entry.id === id)
-    if (!collection) return
-    await rm(safePath(collection.folderName), { recursive: true, force: true })
+    await withCollectionWriteLock(id, async () => {
+      const library = await loadLibrary()
+      const collection = library.collections.find((entry) => entry.id === id)
+      if (!collection) return
+      await rm(safePath(collection.folderName), { recursive: true, force: true })
+    })
   })
   ipcMain.handle('library:add-chapters', (_event, collectionId: unknown, language: unknown) => {
     if (typeof collectionId !== 'string') throw new Error('Identifiant de collection invalide.')
@@ -377,25 +416,33 @@ function registerHandlers() {
   })
   ipcMain.handle('library:update-book', async (_event, input: unknown) => {
     if (!validBook(input)) throw new Error('Les informations de ce chapitre sont invalides.')
-    const library = await loadLibrary()
-    const directory = library.collections.find((entry) => entry.id === input.collectionId)
-    if (!directory) throw new Error('La collection de ce chapitre est introuvable.')
-    const collectionDirectory = await readCollectionDirectory(directory.folderName)
-    if (!collectionDirectory) throw new Error('Le dossier de cette collection est introuvable.')
-    const books = collectionDirectory.books.map((book) => book.id === input.id ? input : book)
-    if (!books.some((book) => book.id === input.id)) throw new Error('Ce chapitre est introuvable.')
-    await saveCollectionDirectory({ collection: directory, books })
+    await withCollectionWriteLock(input.collectionId, async () => {
+      const library = await loadLibrary()
+      const directory = library.collections.find((entry) => entry.id === input.collectionId)
+      if (!directory) throw new Error('La collection de ce chapitre est introuvable.')
+      const collectionDirectory = await readCollectionDirectory(directory.folderName)
+      if (!collectionDirectory) throw new Error('Le dossier de cette collection est introuvable.')
+      const books = collectionDirectory.books.map((book) => book.id === input.id ? input : book)
+      if (!books.some((book) => book.id === input.id)) throw new Error('Ce chapitre est introuvable.')
+      await saveCollectionDirectory({ collection: directory, books })
+    })
   })
   ipcMain.handle('library:delete-book', async (_event, id: unknown) => {
     if (typeof id !== 'string') throw new Error('Identifiant de chapitre invalide.')
     const library = await loadLibrary()
     for (const collection of library.collections) {
-      const directory = await readCollectionDirectory(collection.folderName)
-      if (!directory) continue
-      const book = directory.books.find((entry) => entry.id === id)
-      if (!book) continue
-      await rm(safePath(book.relativePath), { force: true })
-      await saveCollectionDirectory({ collection, books: directory.books.filter((entry) => entry.id !== id) })
+      if (!library.books.some((book) => book.id === id && book.collectionId === collection.id)) continue
+      await withCollectionWriteLock(collection.id, async () => {
+        const latestLibrary = await loadLibrary()
+        const latestCollection = latestLibrary.collections.find((entry) => entry.id === collection.id)
+        if (!latestCollection) return
+        const directory = await readCollectionDirectory(latestCollection.folderName)
+        if (!directory) return
+        const book = directory.books.find((entry) => entry.id === id)
+        if (!book) return
+        await rm(safePath(book.relativePath), { force: true })
+        await saveCollectionDirectory({ collection: latestCollection, books: directory.books.filter((entry) => entry.id !== id) })
+      })
       return
     }
   })
@@ -430,8 +477,14 @@ async function createWindow() {
 
 async function initialize() {
   libraryRoot = await initializeLibraryRoot(app.getPath('userData'))
+  try {
+    await updates.initialize()
+  } catch (reason) {
+    updates.reportError(reason)
+  }
   registerHandlers()
   await createWindow()
+  if (updates.snapshot().automatic && updates.snapshot().phase !== 'unsupported') void updates.check()
 }
 
 app.whenReady().then(initialize).catch((reason: unknown) => {

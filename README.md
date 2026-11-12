@@ -23,7 +23,8 @@ De l’intelligence artificielle a été utilisée lors du développement de ce 
 - **Formats pris en charge** : lis tes chapitres PDF, CBZ et EPUB dans l’application.
 - **Organisation** : recherche et filtre tes collections, trie tes chapitres et indique leur langue (français ou anglais).
 - **Import et export** : ajoute des chapitres depuis ton PC et transfère une collection complète avec une archive ZIP Yomu.
-- **Lecture personnalisée** : profite du plein écran et, pour les PDF, ajuste le zoom ou verrouille-le pour toute une collection.
+- **Lecture personnalisée** : passe au chapitre précédent ou suivant, profite du plein écran et, pour les PDF, ajuste le zoom ou verrouille-le pour toute une collection.
+- **Mises à jour** : consulte la disponibilité d’une nouvelle version depuis les paramètres et choisis quand la télécharger et l’installer.
 
 ## Prise en main
 
@@ -34,7 +35,7 @@ De l’intelligence artificielle a été utilisée lors du développement de ce 
 
 Les fichiers importés sont copiés dans ta bibliothèque : les originaux ne sont pas modifiés. Tu peux consulter ou changer le dossier de bibliothèque dans les paramètres ; le changer ne déplace pas les collections existantes.
 
-Par défaut, la bibliothèque se trouve dans le sous-dossier `Bibliotheque` du dossier de données de Yomu, généralement sous `%APPDATA%\Yomu` sur Windows. Le chemin exact est affiché dans les paramètres, avec un bouton pour ouvrir le dossier. Si tu utilisais déjà une bibliothèque, Yomu conserve son emplacement. Si ce dossier devient introuvable, reconnecte-le ou sélectionne un autre dossier.
+Par défaut, la bibliothèque de l’application installée se trouve dans `%APPDATA%\yomu-installed\Bibliotheque` sur Windows. Le chemin exact est affiché dans les paramètres, avec un bouton pour ouvrir le dossier. Si tu utilisais déjà une bibliothèque avec ce profil, Yomu conserve son emplacement. Si ce dossier devient introuvable, reconnecte-le ou sélectionne un autre dossier.
 
 > **Attention :** supprimer une collection supprime définitivement son dossier et tous les fichiers qu’il contient. Les fichiers d’origine situés ailleurs ne sont pas touchés.
 
@@ -48,11 +49,17 @@ Par défaut, la bibliothèque se trouve dans le sous-dossier `Bibliotheque` du d
 
 Dans un PDF, utilise les commandes du lecteur ou **Ctrl + molette** pour régler le zoom. Le cadenas permet de mémoriser le zoom pour les PDF de la collection ; il reste enregistré après un redémarrage.
 
+Yomu reprend à la dernière page enregistrée (ou à la position de lecture pour un EPUB). Pour les chapitres lus avant cette fonctionnalité, la reprise est approximée à partir du pourcentage existant lorsque le format le permet. Modifier manuellement la progression réinitialise la position enregistrée et utilise ce pourcentage pour la prochaine ouverture.
+
+## Mises à jour
+
+Dans **Paramètres > Mises à jour**, tu peux vérifier manuellement si Yomu est à jour. La vérification automatique au démarrage est désactivée par défaut ; tu peux l’activer ou la désactiver à tout moment. Une vérification contacte GitHub et nécessite une connexion Internet. Une version disponible est signalée dans l’application.
+
+Le téléchargement ne commence que lorsque tu cliques sur **Télécharger la mise à jour**. Une fois terminé, clique sur **Installer et redémarrer** pour fermer Yomu et lancer l’installation. Fermer simplement Yomu n’installe pas la mise à jour. Ces fonctions sont disponibles dans l’application Windows installée, pas en mode développement. Une version de Yomu antérieure à cette fonctionnalité doit d’abord être mise à jour manuellement.
+
 ### Limites connues
 
-- La progression affichée ne permet pas encore de reprendre automatiquement à la dernière page. Son enregistrement et sa modification présentent actuellement des problèmes, notamment pour les EPUB et les PDF Manhwa.
-- Les raccourcis EPUB, notamment après un changement de section, restent à vérifier avec de vrais fichiers dans Electron.
-- Les mises à jour automatiques ne sont pas encore disponibles.
+- Pour les PDF Manhwa, la reprise ouvre la dernière page repérée, pas nécessairement la position exacte dans cette page.
 
 ## Développement
 
@@ -77,8 +84,11 @@ La version de développement utilise son profil habituel (`%APPDATA%\yomu` sur W
 npm.cmd run build:desktop
 npm.cmd run lint
 npm.cmd run test:build-assets
+npm.cmd run test:updates
 npm.cmd run test:library-root
 npm.cmd run test:reading-settings
+npm.cmd run test:reading-position
+npm.cmd run test:collection-lock
 npm.cmd run test:collection-export
 npm.cmd run test:collection-import
 ```
@@ -89,7 +99,13 @@ npm.cmd run test:collection-import
 npm.cmd run package:win
 ```
 
-L’installateur est généré dans le dossier `dist`. Il n’est actuellement pas signé : Windows peut afficher un avertissement lors de son lancement.
+L’installateur est généré dans le dossier `release`, distinct des fichiers de compilation de `dist` afin qu’un nouveau build ne l’efface pas. Il n’est actuellement pas signé : Windows peut afficher un avertissement lors de son lancement.
+
+### Publier une mise à jour
+
+Augmente la version dans `package.json` et actualise `package-lock.json`, puis génère l’installateur sur Windows. Publie une **release GitHub publique** du dépôt `laserfuse/Yomu`, avec un tag correspondant à la version (par exemple `v0.0.2`), en joignant au minimum l’installateur `.exe` et le fichier `latest.yml` générés ensemble dans `release`. Joins aussi le fichier `.exe.blockmap` pour permettre les téléchargements différentiels. Une simple modification de la branche GitHub ne constitue pas une mise à jour. Les versions préliminaires et les brouillons ne sont pas distribués comme versions stables.
+
+L’installateur n’étant pas signé, sa provenance ne bénéficie pas de la protection d’une signature de code Windows ; protège l’accès au dépôt et aux releases GitHub. Teste le parcours avec une application installée et un profil temporaire avant publication.
 
 ## Stockage
 

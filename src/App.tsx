@@ -23,7 +23,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
+import { siGithub } from 'simple-icons'
+import { version as packageVersion } from '../package.json'
+import type { UpdateState } from '../electron/update-types'
 import { compareChapters, getChapterNumber } from './library'
+import type { ReadingPosition } from './reading-position'
 import type {
   ChapterLanguage,
   CollectionKind,
@@ -58,7 +62,8 @@ const statusLabels: Record<LibraryCollection['status'], string> = {
 function formatSize(bytes: number) {
   if (bytes <= 0) return '0 octet'
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} Ko`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} Go`
 }
 
 function blobFromBytes(bytes: Uint8Array, type = ''): Blob {
@@ -232,7 +237,7 @@ function EditChapterDialog({
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const title = chapter.trim()
-    onSave({ ...book, title, chapter: title, language: language || null })
+    onSave({ ...book, title, chapter: title, language: language || null, progress, readingPosition: progress === book.progress ? book.readingPosition : undefined })
   }
 
   return (
@@ -428,12 +433,36 @@ function App() {
   const [notice, setNotice] = useState('')
   const [isExportingCollection, setIsExportingCollection] = useState(false)
   const [isImportingCollection, setIsImportingCollection] = useState(false)
+  const [updateState, setUpdateState] = useState<UpdateState | null>(null)
+  const [updateActionPending, setUpdateActionPending] = useState(false)
   const booksRef = useRef<LibraryBook[]>([])
+  const openRequestRef = useRef(0)
   const activeCollection = collections.find((collection) => collection.id === activeCollectionId)
 
   useLayoutEffect(() => {
     booksRef.current = books
   }, [books])
+
+  useEffect(() => {
+    if (!window.yomu?.getUpdateState || !window.yomu.onUpdateState) return
+    let active = true
+    const unsubscribe = window.yomu.onUpdateState((state) => { if (active) setUpdateState(state) })
+    window.yomu.getUpdateState()
+      .then((state) => { if (active) setUpdateState(state) })
+      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : 'Impossible de charger les mises à jour.') })
+    return () => { active = false; unsubscribe() }
+  }, [])
+
+  async function updateAction(action: () => Promise<void>) {
+    setUpdateActionPending(true)
+    try {
+      await action()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'L’opération de mise à jour a échoué.')
+    } finally {
+      setUpdateActionPending(false)
+    }
+  }
 
   const refreshLibrary = useCallback(async () => {
     if (!window.yomu) throw new Error('L’application Windows Yomu est nécessaire pour accéder à ton dossier.')
@@ -478,6 +507,16 @@ function App() {
     return counts
   }, [books])
 
+  const collectionSizes = useMemo(() => {
+    const sizes = new Map<string, number>()
+    for (const book of books) sizes.set(book.collectionId, (sizes.get(book.collectionId) ?? 0) + book.size)
+    return sizes
+  }, [books])
+  const totalLibrarySize = useMemo(
+    () => books.reduce((total, book) => total + book.size, 0),
+    [books],
+  )
+
   const counts = useMemo(() => {
     const result: Record<LibraryView, number> = {
       all: collections.length,
@@ -515,8 +554,19 @@ function App() {
         : allCollectionBooks.some((book) => book.language === null) ? 'unassigned' : 'fr')
   const collectionBooks = allCollectionBooks.filter((book) => selectedLanguage === 'unassigned' ? book.language === null : book.language === selectedLanguage)
 
+  const readerChapters = useMemo(
+    () => readerBook
+      ? books.filter((book) => book.collectionId === readerBook.book.collectionId && book.language === readerBook.book.language)
+        .sort((a, b) => compareChapters(a, b) || a.addedAt - b.addedAt || a.id.localeCompare(b.id))
+      : [],
+    [books, readerBook],
+  )
+  const readerChapterIndex = readerBook ? readerChapters.findIndex((book) => book.id === readerBook.book.id) : -1
+  const previousReaderChapter = readerChapterIndex > 0 ? readerChapters[readerChapterIndex - 1] : null
+  const nextReaderChapter = readerChapterIndex >= 0 ? readerChapters[readerChapterIndex + 1] ?? null : null
+
   const continueBook = useMemo(
-    () => books.filter((book) => book.progress > 0 && book.progress < 100)
+    () => books.filter((book) => book.progress < 100 && (book.progress > 0 || (book.lastOpenedAt !== null && book.readingPosition !== undefined)))
       .sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0))[0],
     [books],
   )
@@ -642,13 +692,20 @@ function App() {
       setError('La collection de ce chapitre est introuvable.')
       return
     }
+    const request = ++openRequestRef.current
+    setError('')
     try {
       const bytes = await window.yomu.readAsset(book.relativePath)
+      if (request !== openRequestRef.current) return
       const mimeType = book.format === 'PDF' ? 'application/pdf' : book.format === 'EPUB' ? 'application/epub+zip' : 'application/zip'
-      const updated = { ...book, file: blobFromBytes(bytes, mimeType), lastOpenedAt: Date.now(), progress: book.progress || 1 }
-      setReaderBook({ book: updated, kind: collection.kind })
+      const currentBook = booksRef.current.find((entry) => entry.id === book.id) ?? book
+      const updated = { ...currentBook, file: blobFromBytes(bytes, mimeType), lastOpenedAt: Date.now() }
       await window.yomu.updateBook(updated)
-      setBooks((current) => current.map((entry) => entry.id === book.id ? updated : entry))
+      if (request !== openRequestRef.current) return
+      const nextBooks = booksRef.current.map((entry) => entry.id === book.id ? updated : entry)
+      booksRef.current = nextBooks
+      setBooks(nextBooks)
+      setReaderBook({ book: updated, kind: collection.kind })
       if (updated.progress < 100) {
         if (collection.status === 'to-read') {
           const nextCollection = { ...collection, status: 'reading' as const }
@@ -657,14 +714,14 @@ function App() {
         }
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'La progression n’a pas pu être enregistrée.')
+      if (request === openRequestRef.current) setError(reason instanceof Error ? reason.message : 'Le chapitre n’a pas pu être ouvert.')
     }
   }
 
-  const updateProgress = useCallback((bookId: string, progress: number) => {
+  const updateProgress = useCallback((bookId: string, progress: number, readingPosition: ReadingPosition) => {
     const book = booksRef.current.find((entry) => entry.id === bookId)
-    if (!book || book.progress === progress) return
-    const updated = { ...book, progress }
+    if (!book || (book.progress === progress && JSON.stringify(book.readingPosition) === JSON.stringify(readingPosition))) return
+    const updated = { ...book, progress, readingPosition }
     const nextBooks = booksRef.current.map((entry) => entry.id === bookId ? updated : entry)
     booksRef.current = nextBooks
     setBooks(nextBooks)
@@ -704,6 +761,18 @@ function App() {
     }
   }
 
+  const openGitHub = async () => {
+    if (!window.yomu) {
+      setError('L’application Windows Yomu est nécessaire pour ouvrir GitHub.')
+      return
+    }
+    try {
+      await window.yomu.openGitHub()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Le dépôt GitHub n’a pas pu être ouvert.')
+    }
+  }
+
   const navItems: { id: LibraryView; icon: typeof Library }[] = [
     { id: 'all', icon: Library },
     { id: 'reading', icon: Clock3 },
@@ -713,7 +782,7 @@ function App() {
   ]
 
   if (readerBook) {
-    return <Suspense fallback={<div className="reader-loading full-screen"><span>Ouverture du lecteur…</span></div>}><Reader book={readerBook.book} collectionKind={readerBook.kind} onClose={() => setReaderBook(null)} onProgress={(progress) => updateProgress(readerBook.book.id, progress)} /></Suspense>
+    return <Suspense fallback={<div className="reader-loading full-screen"><span>Ouverture du lecteur…</span></div>}><Reader book={readerBook.book} collectionKind={readerBook.kind} previousChapter={previousReaderChapter} nextChapter={nextReaderChapter} onNavigateChapter={(book) => void openBook(book)} onClose={() => { openRequestRef.current++; setReaderBook(null) }} onProgress={updateProgress} error={error} /></Suspense>
   }
 
   const openCreateCollection = () => {
@@ -776,6 +845,9 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
+          <div className="sidebar-storage" title="Taille totale des chapitres de toutes les collections">
+            <span>Espace utilisé</span><strong>{formatSize(totalLibrarySize)}</strong>
+          </div>
           <button
             className="nav-item sidebar-import"
             title="Importer une collection depuis un fichier ZIP"
@@ -814,11 +886,66 @@ function App() {
         <div className={`content-inner ${collections.length === 0 && !isSettingsOpen ? 'empty-library' : ''}`}>
           {error && <div role="alert" className="error-banner"><span>{error}</span><button aria-label="Fermer" onClick={() => setError('')}><X size={17} /></button></div>}
           {notice && <div role="status" className="success-banner"><span>{notice}</span><button aria-label="Fermer" onClick={() => setNotice('')}><X size={17} /></button></div>}
+          {!isSettingsOpen && (updateState?.phase === 'available' || updateState?.phase === 'downloaded') && (
+            <div role="status" className="success-banner">
+              <span>Une mise à jour de Yomu est {updateState.phase === 'downloaded' ? 'prête à être installée' : 'disponible'}.</span>
+              <button onClick={() => { setActiveCollectionId(''); setIsSettingsOpen(true) }}>Voir les paramètres</button>
+            </div>
+          )}
+          {!isSettingsOpen && updateState?.phase === 'error' && (
+            <div role="alert" className="error-banner">
+              <span>Erreur de mise à jour : {updateState.message}</span>
+              <button onClick={() => { setActiveCollectionId(''); setIsSettingsOpen(true) }}>Voir les paramètres</button>
+            </div>
+          )}
           {isSettingsOpen ? (
             <section className="settings-page">
-              <span className="eyebrow">APPLICATION</span>
               <h1>Paramètres</h1>
-              <p>Gère l’emplacement de ta bibliothèque Yomu.</p>
+              <div className="settings-card settings-version-card">
+                <div className="settings-card-copy">
+                  <strong>Informations</strong>
+                  <span>Yomu est une application pour organiser et lire tes mangas et manhwas directement sur ton PC.</span>
+                  <span>Créé par laserfuse</span>
+                  <code className="settings-version" aria-label={`Version de l’application : v${updateState?.version ?? packageVersion}`}>v{updateState?.version ?? packageVersion}</code>
+                </div>
+                <button className="button-secondary settings-github" onClick={() => void openGitHub()}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={siGithub.path} /></svg> Voir le projet sur GitHub
+                </button>
+              </div>
+              <div className="settings-card settings-updates">
+                <div className="settings-card-copy">
+                  <strong>Mises à jour</strong>
+                  <span>Vérifier sur GitHub au démarrage. Aucun téléchargement ni installation sans ton accord.</span>
+                  <label className="settings-update-toggle">
+                    <input type="checkbox" checked={updateState?.automatic ?? false}
+                      disabled={!updateState?.supported || updateActionPending}
+                      onChange={(event) => {
+                        const automatic = event.target.checked
+                        if (window.yomu) void updateAction(() => window.yomu!.setAutomaticUpdates(automatic))
+                      }} />
+                    Vérification automatique
+                  </label>
+                  <span role={updateState?.phase === 'error' ? 'alert' : 'status'}>
+                    {!updateState && 'Chargement des informations de mise à jour…'}
+                    {updateState?.phase === 'unsupported' && 'Disponible uniquement dans l’application Windows installée.'}
+                    {updateState?.phase === 'idle' && 'Aucune vérification effectuée.'}
+                    {updateState?.phase === 'checking' && 'Vérification en cours…'}
+                    {updateState?.phase === 'current' && 'Yomu est à jour.'}
+                    {updateState?.phase === 'available' && `Version ${updateState.availableVersion} disponible.`}
+                    {updateState?.phase === 'downloading' && `Téléchargement en cours : ${updateState.progress ?? 0} %`}
+                    {updateState?.phase === 'downloaded' && `Version ${updateState.availableVersion} prête à être installée.`}
+                    {updateState?.phase === 'error' && `Impossible de mettre à jour Yomu : ${updateState.message}`}
+                  </span>
+                </div>
+                <div className="settings-update-actions">
+                  <button className="button-secondary" disabled={!updateState?.supported || updateState.phase === 'checking' || updateState.phase === 'downloading' || updateState.phase === 'downloaded' || updateActionPending}
+                    onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.checkForUpdates()) }}>Vérifier les mises à jour</button>
+                  {updateState?.phase === 'available' && <button className="button-primary" disabled={updateActionPending}
+                    onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.downloadUpdate()) }}>Télécharger la mise à jour</button>}
+                  {updateState?.phase === 'downloaded' && <button className="button-primary" disabled={updateActionPending}
+                    onClick={() => { if (window.yomu) void updateAction(() => window.yomu!.installUpdate()) }}>Installer et redémarrer</button>}
+                </div>
+              </div>
               <div className="settings-card">
                 <div className="settings-card-copy">
                   <strong>Dossier de bibliothèque</strong>
@@ -842,7 +969,7 @@ function App() {
                 <div className="collection-detail-info">
                   <div className="collection-badges"><span>{activeCollection.kind}</span><span className={`status-pill status-${activeCollection.status}`}>{statusLabels[activeCollection.status]}</span></div>
                   <h1>{activeCollection.title}</h1>
-                  <p>{allCollectionBooks.length} chapitre{allCollectionBooks.length > 1 ? 's' : ''} disponible{allCollectionBooks.length > 1 ? 's' : ''}</p>
+                  <p>{allCollectionBooks.length} chapitre{allCollectionBooks.length > 1 ? 's' : ''} · {formatSize(collectionSizes.get(activeCollection.id) ?? 0)}</p>
                   <div className="detail-actions">
                     <button className="button-primary" onClick={() => setShowImportLanguage(true)} disabled={isImporting}><Plus size={16} />{isImporting ? 'Import en cours…' : 'Ajouter des chapitres'}</button>
                     <button className="button-secondary" onClick={() => void exportCollection(activeCollection)} disabled={isExportingCollection}><Archive size={15} />{isExportingCollection ? 'Exportation…' : 'Exporter'}</button>
@@ -951,7 +1078,7 @@ function App() {
                                 <div className="collection-card-info">
                                   <div className="collection-card-kicker">{collection.kind}<span>·</span>{statusLabels[collection.status]}</div>
                                   <strong>{collection.title}</strong>
-                                  <span>{chapterCount} chapitre{chapterCount > 1 ? 's' : ''}</span>
+                                  <span>{chapterCount} chapitre{chapterCount > 1 ? 's' : ''} · {formatSize(collectionSizes.get(collection.id) ?? 0)}</span>
                                 </div>
                               </button>
                               <button className="icon-button collection-card-edit" aria-label={`Modifier ${collection.title}`} onClick={() => setEditingCollection(collection)}><Pencil size={14} /></button>

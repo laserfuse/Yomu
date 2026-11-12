@@ -18,3 +18,10 @@ test('les ressources de la page compilée sont accessibles depuis une URL file',
     assert.ok((await stat(assetPath)).isFile(), `La ressource ${asset} est introuvable.`)
   }
 })
+
+test('la compilation web ne partage pas son dossier avec les installateurs', async () => {
+  const packageJson = JSON.parse(await readFile('package.json', 'utf8'))
+  const output = path.resolve(packageJson.build.directories.output)
+  const fromWebOutput = path.relative(path.resolve('dist'), output)
+  assert.ok(fromWebOutput && (fromWebOutput === '..' || fromWebOutput.startsWith(`..${path.sep}`) || path.isAbsolute(fromWebOutput)))
+})

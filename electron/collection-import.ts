@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import * as yauzl from 'yauzl'
+import { validReadingPosition } from './reading-position.js'
+import type { ReadingPosition } from './reading-position.js'
 
 type CollectionKind = 'Manga' | 'Manhwa'
 type CollectionStatus = 'to-read' | 'reading' | 'paused' | 'completed'
@@ -33,6 +35,7 @@ interface BookRecord {
   addedAt: number
   lastOpenedAt: number | null
   progress: number
+  readingPosition?: ReadingPosition
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,7 +67,8 @@ function validBook(value: unknown): value is BookRecord {
     && typeof value.size === 'number'
     && typeof value.addedAt === 'number'
     && (typeof value.lastOpenedAt === 'number' || value.lastOpenedAt === null)
-    && typeof value.progress === 'number'
+    && typeof value.progress === 'number' && Number.isFinite(value.progress) && value.progress >= 0 && value.progress <= 100
+    && validReadingPosition(value.readingPosition, value.format)
 }
 
 function safeArchivePath(fileName: string): { root: string; relativePath: string } {

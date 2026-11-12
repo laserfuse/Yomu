@@ -1,6 +1,14 @@
 import type { ChapterLanguage, LibraryBook, LibraryCollection, StoredBook, StoredCollection } from './library'
+import type { UpdateState } from '../electron/update-types'
 
 interface YomuDesktopApi {
+  openGitHub(): Promise<void>
+  getUpdateState(): Promise<UpdateState>
+  setAutomaticUpdates(automatic: boolean): Promise<void>
+  checkForUpdates(): Promise<void>
+  downloadUpdate(): Promise<void>
+  installUpdate(): Promise<void>
+  onUpdateState(callback: (state: UpdateState) => void): () => void
   getLibraryRoot(): Promise<string | null>
   chooseLibraryRoot(): Promise<string | null>
   openLibraryRoot(): Promise<void>

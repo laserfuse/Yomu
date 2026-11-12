@@ -1,7 +1,7 @@
 {
   "name": "yomu",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "license": "CC-BY-NC-4.0",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -13,8 +13,11 @@
     "desktop:dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1 --port 5175 --strictPort\" \"wait-on http://127.0.0.1:5175 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron .\"",
     "package:win": "npm run build:desktop && electron-builder --win nsis",
     "test:reading-settings": "npm run build:electron && node --test tests/reading-settings.test.mjs",
+    "test:reading-position": "npm run build:electron && node --test tests/reading-position.test.mjs",
+    "test:collection-lock": "npm run build:electron && node --test tests/collection-lock.test.mjs",
     "test:library-root": "npm run build:electron && node --test tests/library-root.test.mjs",
     "test:build-assets": "node --test tests/build-assets.test.mjs",
+    "test:updates": "npm run build:electron && node --test tests/updates.test.mjs",
     "lint": "oxlint",
     "test:collection-export": "npm run build:electron && node --test tests/collection-export.test.mjs",
     "test:collection-import": "npm run build:electron && node --test tests/collection-import.test.mjs",
@@ -23,6 +26,9 @@
   "build": {
     "appId": "com.yomu.reader",
     "productName": "Yomu",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -31,18 +37,27 @@
     "win": {
       "target": "nsis"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "laserfuse",
+        "repo": "Yomu"
+      }
+    ],
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "epubjs": "^0.3.93",
     "jszip": "^3.10.2",
     "lucide-react": "^1.72.0",
     "pdfjs-dist": "^6.5.438",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "simple-icons": "^16.37.0",
     "yauzl": "^3.4.0"
   },
   "overrides": {

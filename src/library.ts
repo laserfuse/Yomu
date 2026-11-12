@@ -1,3 +1,5 @@
+import type { ReadingPosition } from './reading-position'
+
 export type BookFormat = 'PDF' | 'CBZ' | 'EPUB'
 export type CollectionKind = 'Manga' | 'Manhwa'
 export type CollectionStatus = 'to-read' | 'reading' | 'paused' | 'completed'
@@ -29,6 +31,7 @@ export interface LibraryBook {
   addedAt: number
   lastOpenedAt: number | null
   progress: number
+  readingPosition?: ReadingPosition
 }
 
 export type StoredBook = Omit<LibraryBook, 'file'>

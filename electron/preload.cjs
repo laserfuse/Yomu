@@ -1,6 +1,17 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('yomu', {
+  openGitHub: () => ipcRenderer.invoke('app:open-github'),
+  getUpdateState: () => ipcRenderer.invoke('updates:get'),
+  setAutomaticUpdates: (automatic) => ipcRenderer.invoke('updates:set-automatic', automatic),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updates:download'),
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
+  onUpdateState: (callback) => {
+    const listener = (_event, state) => callback(state)
+    ipcRenderer.on('updates:state', listener)
+    return () => ipcRenderer.removeListener('updates:state', listener)
+  },
   getLibraryRoot: () => ipcRenderer.invoke('library:get-root'),
   chooseLibraryRoot: () => ipcRenderer.invoke('library:choose-root'),
   openLibraryRoot: () => ipcRenderer.invoke('library:open-root'),
