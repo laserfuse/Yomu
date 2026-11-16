@@ -2,10 +2,55 @@ import { randomUUID } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import type { UpdateState } from './update-types.js'
 
+function formatUpdateError(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  let code: string | null = null
+  let statusCode: number | null = null
+
+  if (typeof reason === 'object' && reason !== null) {
+    if ('code' in reason && typeof reason.code === 'string') code = reason.code
+    if ('statusCode' in reason && typeof reason.statusCode === 'number') statusCode = reason.statusCode
+  }
+
+  const networkCodes = new Set([
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EAI_AGAIN',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'ETIMEDOUT',
+    'ERR_CONNECTION_CLOSED',
+    'ERR_CONNECTION_RESET',
+    'ERR_CONNECTION_TIMED_OUT',
+    'ERR_INTERNET_DISCONNECTED',
+    'ERR_NETWORK_CHANGED',
+  ])
+  if (statusCode === 429 || /rate[\s-]?limit|too many requests/i.test(message)) {
+    return `GitHub limite temporairement les requêtes. Réessaie dans quelques minutes. Détail : ${message}`
+  }
+  if ((code !== null && networkCodes.has(code)) || /internet|network|dns|timed?\s*out/i.test(message)) {
+    return `Connexion impossible aux serveurs de mise à jour. Vérifie ta connexion Internet puis réessaie. Détail : ${message}`
+  }
+  return message
+}
+
 interface Updater {
-  checkForUpdates(): Promise<{ isUpdateAvailable: boolean; updateInfo: { version: string } } | null>
+  checkForUpdates(): Promise<{
+    isUpdateAvailable: boolean
+    updateInfo: { version: string; releaseNotes?: string | Array<{ version: string; note: string | null }> | null }
+  } | null>
   downloadUpdate(): Promise<string[]>
   quitAndInstall(): void
+}
+
+function getReleaseNotes(notes: string | Array<{ version: string; note: string | null }> | null | undefined): string | null {
+  if (typeof notes === 'string') return notes.trim() || null
+  if (!notes) return null
+  const sections = notes.flatMap((entry) => {
+    const note = entry.note?.trim()
+    return note ? [`${entry.version}\n${note}`] : []
+  })
+  return sections.length ? sections.join('\n\n') : null
 }
 
 export class UpdateManager {
@@ -27,7 +72,7 @@ export class UpdateManager {
     this.settingsPath = settingsPath
     this.supported = supported
     this.publish = publish
-    this.state = { version, supported, automatic: false, phase: supported ? 'idle' : 'unsupported', availableVersion: null, progress: null, message: null }
+    this.state = { version, supported, automatic: false, phase: supported ? 'idle' : 'unsupported', availableVersion: null, releaseNotes: null, progress: null, message: null }
   }
 
   snapshot(): UpdateState {
@@ -40,8 +85,7 @@ export class UpdateManager {
   }
 
   reportError(reason: unknown): void {
-    const message = reason instanceof Error ? reason.message : String(reason)
-    this.change({ phase: 'error', progress: null, message })
+    this.change({ phase: 'error', progress: null, message: formatUpdateError(reason) })
   }
 
   async initialize(): Promise<void> {
@@ -72,13 +116,14 @@ export class UpdateManager {
     if (this.busy) throw new Error('Une opération de mise à jour est déjà en cours.')
     if (this.state.phase === 'downloaded') throw new Error('Une mise à jour est déjà prête à être installée.')
     this.busy = true
-    this.change({ phase: 'checking', availableVersion: null, progress: null, message: null })
+    this.change({ phase: 'checking', availableVersion: null, releaseNotes: null, progress: null, message: null })
     try {
       const result = await this.updater.checkForUpdates()
       if (!result) throw new Error('La vérification des mises à jour est indisponible.')
       this.change({
         phase: result.isUpdateAvailable ? 'available' : 'current',
         availableVersion: result.isUpdateAvailable ? result.updateInfo.version : null,
+        releaseNotes: result.isUpdateAvailable ? getReleaseNotes(result.updateInfo.releaseNotes) : null,
       })
     } catch (reason) {
       this.reportError(reason)

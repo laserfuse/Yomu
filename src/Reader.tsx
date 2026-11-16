@@ -8,8 +8,9 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { ArrowLeft, ArrowRight, LoaderCircle, LockKeyhole, LockKeyholeOpen, Maximize, Minimize, RotateCcw, SkipBack, SkipForward, ZoomIn, ZoomOut } from 'lucide-react'
 import type { CollectionKind, LibraryBook } from './library'
-import { initialPage, pageAtViewportCenter } from './reading-position'
+import { initialPage, initialPagePosition, pagePositionAtViewportCenter } from './reading-position'
 import type { ReadingPosition } from './reading-position'
+import { useUiLanguage } from './use-ui-language'
 
 interface ReaderProps {
   book: LibraryBook
@@ -23,17 +24,38 @@ interface ReaderProps {
 }
 
 type ReaderContentProps = Pick<ReaderProps, 'book' | 'collectionKind'> & {
+  onClose: ReaderProps['onClose']
   onProgress: (progress: number, position: ReadingPosition) => void
 }
 
+function ReaderError({ format, message, onClose }: {
+  format: LibraryBook['format']
+  message: string
+  onClose: ReaderProps['onClose']
+}) {
+  const { t } = useUiLanguage()
+  return (
+    <div className="reader-error" role="alert">
+      <strong>{t('Impossible de lire ce chapitre')}</strong>
+      <p>{t('Vérifie que le fichier {format} est complet et accessible. Si le problème persiste, retourne à la bibliothèque pour le réimporter.', { format })}</p>
+      <details>
+        <summary>{t('Détails techniques')}</summary>
+        <code>{message}</code>
+      </details>
+      <button className="button-secondary" onClick={onClose}>{t('Retour à la bibliothèque')}</button>
+    </div>
+  )
+}
+
 function ChapterNavigation({ previousChapter, nextChapter, onNavigateChapter }: Pick<ReaderProps, 'previousChapter' | 'nextChapter' | 'onNavigateChapter'>) {
+  const { t } = useUiLanguage()
   return (
     <>
-      <button className="reader-chapter-button" aria-label={previousChapter ? `Lire le chapitre précédent : ${previousChapter.chapter || previousChapter.title}` : 'Aucun chapitre précédent'} title={previousChapter ? `Chapitre précédent : ${previousChapter.chapter || previousChapter.title}` : 'Aucun chapitre précédent'} disabled={!previousChapter} onClick={() => previousChapter && onNavigateChapter(previousChapter)}>
-        <SkipBack size={16} /><span>Précédent</span>
+      <button className="reader-chapter-button" aria-label={previousChapter ? t('Lire le chapitre précédent : {title}', { title: previousChapter.chapter || previousChapter.title }) : t('Aucun chapitre précédent')} title={previousChapter ? t('Chapitre précédent : {title}', { title: previousChapter.chapter || previousChapter.title }) : t('Aucun chapitre précédent')} disabled={!previousChapter} onClick={() => previousChapter && onNavigateChapter(previousChapter)}>
+        <SkipBack size={16} /><span>{t('Précédent')}</span>
       </button>
-      <button className="reader-chapter-button" aria-label={nextChapter ? `Lire le chapitre suivant : ${nextChapter.chapter || nextChapter.title}` : 'Aucun chapitre suivant'} title={nextChapter ? `Chapitre suivant : ${nextChapter.chapter || nextChapter.title}` : 'Aucun chapitre suivant'} disabled={!nextChapter} onClick={() => nextChapter && onNavigateChapter(nextChapter)}>
-        <span>Suivant</span><SkipForward size={16} />
+      <button className="reader-chapter-button" aria-label={nextChapter ? t('Lire le chapitre suivant : {title}', { title: nextChapter.chapter || nextChapter.title }) : t('Aucun chapitre suivant')} title={nextChapter ? t('Chapitre suivant : {title}', { title: nextChapter.chapter || nextChapter.title }) : t('Aucun chapitre suivant')} disabled={!nextChapter} onClick={() => nextChapter && onNavigateChapter(nextChapter)}>
+        <span>{t('Suivant')}</span><SkipForward size={16} />
       </button>
     </>
   )
@@ -45,10 +67,11 @@ function PageNavigation({ onPrevious, onNext, previousDisabled, nextDisabled }: 
   previousDisabled: boolean
   nextDisabled: boolean
 }) {
+  const { t } = useUiLanguage()
   return (
     <>
-      <button className="page-nav page-prev manga-page-nav" aria-label="Page précédente" title="Page précédente" disabled={previousDisabled} onClick={onPrevious}><ArrowLeft size={18} /></button>
-      <button className="page-nav page-next manga-page-nav" aria-label="Page suivante" title="Page suivante" disabled={nextDisabled} onClick={onNext}><ArrowRight size={18} /></button>
+      <button className="page-nav page-prev manga-page-nav" aria-label={t('Page précédente')} title={t('Page précédente')} disabled={previousDisabled} onClick={onPrevious}><ArrowLeft size={18} /></button>
+      <button className="page-nav page-next manga-page-nav" aria-label={t('Page suivante')} title={t('Page suivante')} disabled={nextDisabled} onClick={onNext}><ArrowRight size={18} /></button>
     </>
   )
 }
@@ -137,7 +160,8 @@ function useContinuousPdfScrollNavigation(scrollRef: RefObject<HTMLDivElement | 
   }, [enabled, scrollRef])
 }
 
-function EpubReader({ book, onProgress, collectionKind }: ReaderContentProps) {
+function EpubReader({ book, onClose, onProgress, collectionKind }: ReaderContentProps) {
+  const { t } = useUiLanguage()
   const containerRef = useRef<HTMLDivElement>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const turnPageRef = useRef<(direction: 'previous' | 'next') => void>(() => {})
@@ -198,7 +222,7 @@ function EpubReader({ book, onProgress, collectionKind }: ReaderContentProps) {
       await rendition.display(position ?? fallbackPosition)
       if (active) setReady(true)
     }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : 'Ce fichier EPUB n’a pas pu être ouvert.')
+      if (active) setError(t(reason instanceof Error ? reason.message : 'Ce fichier EPUB n’a pas pu être ouvert.'))
     })
 
     return () => {
@@ -206,7 +230,7 @@ function EpubReader({ book, onProgress, collectionKind }: ReaderContentProps) {
       renditionRef.current = null
       epubBook.destroy()
     }
-  }, [book, collectionKind, onProgress])
+  }, [book, collectionKind, onProgress, t])
 
   const turnPage = useCallback(async (direction: 'previous' | 'next') => {
     const rendition = renditionRef.current
@@ -215,11 +239,11 @@ function EpubReader({ book, onProgress, collectionKind }: ReaderContentProps) {
     try {
       await (direction === 'next' ? rendition.next() : rendition.prev())
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Cette page EPUB n’a pas pu être affichée.')
+      setError(t(reason instanceof Error ? reason.message : 'Cette page EPUB n’a pas pu être affichée.'))
     } finally {
       setTurning(false)
     }
-  }, [turning])
+  }, [t, turning])
   useLayoutEffect(() => {
     turnPageRef.current = (direction) => { void turnPage(direction) }
   }, [turnPage])
@@ -229,17 +253,18 @@ function EpubReader({ book, onProgress, collectionKind }: ReaderContentProps) {
     () => void turnPage('previous'),
     () => void turnPage('next'),
   )
-  if (error) return <div className="reader-error">{error}</div>
+  if (error) return <ReaderError format={book.format} message={error} onClose={onClose} />
   return (
     <>
       <div className="epub-reader" ref={containerRef} />
-      {!ready && <div className="reader-loading epub-loading" role="status"><LoaderCircle className="spin" /> Préparation du livre…</div>}
+      {!ready && <div className="reader-loading epub-loading" role="status"><LoaderCircle className="spin" /> {t('Préparation du livre…')}</div>}
       {collectionKind === 'Manga' && <PageNavigation onPrevious={() => void turnPage('previous')} onNext={() => void turnPage('next')} previousDisabled={!ready || turning || atStart} nextDisabled={!ready || turning || atEnd} />}
     </>
   )
 }
 
-function CbzReader({ book, onProgress, collectionKind }: ReaderContentProps) {
+function CbzReader({ book, onClose, onProgress, collectionKind }: ReaderContentProps) {
+  const { t } = useUiLanguage()
   const [pages, setPages] = useState<JSZip.JSZipObject[]>([])
   const [page, setPage] = useState(0)
   const [imageUrl, setImageUrl] = useState('')
@@ -253,20 +278,20 @@ function CbzReader({ book, onProgress, collectionKind }: ReaderContentProps) {
         const imagePages = Object.values(zip.files)
           .filter((entry) => !entry.dir && /\.(jpe?g|png|gif|webp|avif)$/i.test(entry.name))
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
-        if (imagePages.length === 0) throw new Error('Aucune page image n’a été trouvée dans cette archive CBZ.')
+        if (imagePages.length === 0) throw new Error(t('Aucune page image n’a été trouvée dans cette archive CBZ.'))
         if (active) {
           setPages(imagePages)
           setPage(initialPage(book.readingPosition, book.progress, imagePages.length) - 1)
         }
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Cette archive CBZ n’a pas pu être ouverte.')
+        if (active) setError(t(reason instanceof Error ? reason.message : 'Cette archive CBZ n’a pas pu être ouverte.'))
       })
       .finally(() => {
         if (active) setLoading(false)
       })
     return () => { active = false }
-  }, [book])
+  }, [book, t])
 
   useEffect(() => {
     const currentPage = pages[page]
@@ -282,13 +307,13 @@ function CbzReader({ book, onProgress, collectionKind }: ReaderContentProps) {
         }
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Cette page n’a pas pu être chargée.')
+        if (active) setError(t(reason instanceof Error ? reason.message : 'Cette page n’a pas pu être chargée.'))
       })
     return () => {
       active = false
       if (url) URL.revokeObjectURL(url)
     }
-  }, [onProgress, page, pages])
+  }, [onProgress, page, pages, t])
 
   const changePage = (direction: -1 | 1) => {
     setPage((value) => Math.min(pages.length - 1, Math.max(0, value + direction)))
@@ -299,18 +324,18 @@ function CbzReader({ book, onProgress, collectionKind }: ReaderContentProps) {
     () => changePage(1),
   )
 
-  if (loading) return <div className="reader-loading"><LoaderCircle className="spin" /> Préparation des pages…</div>
-  if (error) return <div className="reader-error">{error}</div>
+  if (loading) return <div className="reader-loading"><LoaderCircle className="spin" /> {t('Préparation des pages…')}</div>
+  if (error) return <ReaderError format={book.format} message={error} onClose={onClose} />
 
   return (
     <div className="cbz-reader">
-      {imageUrl && <img src={imageUrl} alt={`Page ${page + 1}`} />}
+      {imageUrl && <img src={imageUrl} alt={t('Page {number}', { number: page + 1 })} />}
       {collectionKind === 'Manga' ? (
         <PageNavigation previousDisabled={page === 0} nextDisabled={page >= pages.length - 1} onPrevious={() => changePage(-1)} onNext={() => changePage(1)} />
       ) : (
         <>
-          <button className="page-nav page-prev" aria-label="Page précédente" disabled={page === 0} onClick={() => changePage(-1)}><ArrowLeft /></button>
-          <button className="page-nav page-next" aria-label="Page suivante" disabled={page >= pages.length - 1} onClick={() => changePage(1)}><ArrowRight /></button>
+          <button className="page-nav page-prev" aria-label={t('Page précédente')} disabled={page === 0} onClick={() => changePage(-1)}><ArrowLeft /></button>
+          <button className="page-nav page-next" aria-label={t('Page suivante')} disabled={page >= pages.length - 1} onClick={() => changePage(1)}><ArrowRight /></button>
         </>
       )}
       <div className="page-count">{page + 1} / {pages.length}</div>
@@ -341,6 +366,7 @@ function PdfPageCanvas({
   scrollContainerRef: RefObject<HTMLDivElement | null>
   onError: (message: string) => void
 }) {
+  const { t } = useUiLanguage()
   const pageRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isNearViewport, setIsNearViewport] = useState(false)
@@ -373,7 +399,7 @@ function PdfPageCanvas({
         canvas.style.width = `${viewport.width}px`
         canvas.style.height = `${viewport.height}px`
         const context = canvas.getContext('2d')
-        if (!context) throw new Error('Le rendu de cette page PDF n’est pas pris en charge.')
+        if (!context) throw new Error(t('Le rendu de cette page PDF n’est pas pris en charge.'))
         renderTask = pdfPage.render({
           canvas,
           canvasContext: context,
@@ -383,14 +409,14 @@ function PdfPageCanvas({
       })
       .catch((reason: unknown) => {
         if (active && (!(reason instanceof Error) || reason.name !== 'RenderingCancelledException')) {
-          onError(reason instanceof Error ? reason.message : 'Cette page PDF n’a pas pu être affichée.')
+          onError(t(reason instanceof Error ? reason.message : 'Cette page PDF n’a pas pu être affichée.'))
         }
       })
     return () => {
       active = false
       renderTask?.cancel()
     }
-  }, [document, isNearViewport, onError, pageNumber, scale])
+  }, [document, isNearViewport, onError, pageNumber, scale, t])
 
   return (
     <div
@@ -399,14 +425,17 @@ function PdfPageCanvas({
       style={{ width: size.width * scale, height: size.height * scale }}
       data-page={pageNumber}
     >
-      <canvas ref={canvasRef} aria-label={`Page ${pageNumber} du document`} />
+      <canvas ref={canvasRef} aria-label={t('Page {number} du document', { number: pageNumber })} />
     </div>
   )
 }
 
-function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
+function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentProps) {
+  const { t } = useUiLanguage()
   const scrollRef = useRef<HTMLDivElement>(null)
   const restoredRef = useRef(false)
+  const pendingScrollProgressRef = useRef<{ progress: number; position: ReadingPosition } | null>(null)
+  const scrollProgressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const paged = collectionKind === 'Manga'
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
   const [pageSizes, setPageSizes] = useState<PdfPageSize[]>([])
@@ -421,13 +450,31 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
+  const queueScrollProgress = useCallback((progress: number, position: ReadingPosition) => {
+    pendingScrollProgressRef.current = { progress, position }
+    if (scrollProgressTimerRef.current) clearTimeout(scrollProgressTimerRef.current)
+    scrollProgressTimerRef.current = setTimeout(() => {
+      const pending = pendingScrollProgressRef.current
+      pendingScrollProgressRef.current = null
+      scrollProgressTimerRef.current = null
+      if (pending) onProgress(pending.progress, pending.position)
+    }, 250)
+  }, [onProgress])
+
+  useEffect(() => () => {
+    if (scrollProgressTimerRef.current) clearTimeout(scrollProgressTimerRef.current)
+    const pending = pendingScrollProgressRef.current
+    pendingScrollProgressRef.current = null
+    if (pending) onProgress(pending.progress, pending.position)
+  }, [onProgress])
+
   useEffect(() => {
     let active = true
     const api = window.yomu
     if (!api) {
       Promise.resolve().then(() => {
         if (active) {
-          setZoomError('L’application Windows Yomu est nécessaire pour charger le zoom enregistré.')
+          setZoomError(t('L’application Windows Yomu est nécessaire pour charger le zoom enregistré.'))
           setZoomLoading(false)
         }
       })
@@ -441,11 +488,11 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
         }
       })
       .catch((reason: unknown) => {
-        if (active) setZoomError(reason instanceof Error ? reason.message : 'Le zoom enregistré n’a pas pu être chargé.')
+        if (active) setZoomError(t(reason instanceof Error ? reason.message : 'Le zoom enregistré n’a pas pu être chargé.'))
       })
       .finally(() => { if (active) setZoomLoading(false) })
     return () => { active = false }
-  }, [book.collectionId])
+  }, [book.collectionId, t])
 
   useEffect(() => {
     let active = true
@@ -477,7 +524,7 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
         }
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Ce fichier PDF n’a pas pu être ouvert.')
+        if (active) setError(t(reason instanceof Error ? reason.message : 'Ce fichier PDF n’a pas pu être ouvert.'))
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -486,7 +533,7 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
       active = false
       if (loadingTask) void loadingTask.destroy()
     }
-  }, [book])
+  }, [book, t])
 
   useEffect(() => {
     const container = scrollRef.current
@@ -510,13 +557,19 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
   useLayoutEffect(() => {
     const container = scrollRef.current
     if (paged || restoredRef.current || !container || !pageSizes.length || zoomLoading || !containerWidth || !containerHeight) return
-    const page = initialPage(book.readingPosition, book.progress, pageSizes.length)
+    const position = initialPagePosition(book.readingPosition, book.progress, pageSizes.length)
+    const page = position.page
     const element = container.querySelector<HTMLElement>(`[data-page="${page}"]`)
     if (!element) return
-    container.scrollTop += element.getBoundingClientRect().top - container.getBoundingClientRect().top
+    const pageBounds = element.getBoundingClientRect()
+    const containerBounds = container.getBoundingClientRect()
+    const pageTop = pageBounds.top - containerBounds.top
+    container.scrollTop += position.offset === undefined
+      ? pageTop
+      : pageTop + position.offset * pageBounds.height - container.clientHeight / 2
     restoredRef.current = true
     setActivePage(page)
-    onProgress(Math.round(page / pageSizes.length * 100), { page })
+    onProgress(Math.round(page / pageSizes.length * 100), position.offset === undefined ? { page } : position)
   }, [book, containerHeight, containerWidth, onProgress, pageSizes.length, paged, zoomLoading])
 
   const updateVisiblePage = () => {
@@ -527,10 +580,10 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
       const bounds = element.getBoundingClientRect()
       return { page: Number(element.dataset.page), top: bounds.top, bottom: bounds.bottom }
     })
-    const page = pageAtViewportCenter(pages, rect.top + container.clientHeight / 2)
-    if (page === null) return
-    setActivePage(page)
-    onProgress(Math.round(page / pageSizes.length * 100), { page })
+    const position = pagePositionAtViewportCenter(pages, rect.top + container.clientHeight / 2)
+    if (position === null) return
+    setActivePage(position.page)
+    queueScrollProgress(Math.round(position.page / pageSizes.length * 100), position)
   }
   useEffect(() => {
     if (paged && pageSizes.length > 0) onProgress(Math.round((activePage / pageSizes.length) * 100), { page: activePage })
@@ -556,7 +609,7 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
   }
   const toggleZoomLock = async () => {
     if (!window.yomu) {
-      setZoomError('L’application Windows Yomu est nécessaire pour enregistrer le zoom.')
+      setZoomError(t('L’application Windows Yomu est nécessaire pour enregistrer le zoom.'))
       return
     }
     setZoomSaving(true)
@@ -565,13 +618,13 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
       await window.yomu.setPdfZoom(book.collectionId, zoomLocked ? null : zoom)
       setZoomLocked(!zoomLocked)
     } catch (reason) {
-      setZoomError(reason instanceof Error ? reason.message : 'Le zoom n’a pas pu être enregistré.')
+      setZoomError(t(reason instanceof Error ? reason.message : 'Le zoom n’a pas pu être enregistré.'))
     } finally {
       setZoomSaving(false)
     }
   }
 
-  if (error) return <div className="reader-error">{error}</div>
+  if (error) return <ReaderError format={book.format} message={error} onClose={onClose} />
   return (
     <div
       className="pdf-reader"
@@ -581,14 +634,14 @@ function PdfReader({ book, onProgress, collectionKind }: ReaderContentProps) {
         if (event.deltaY !== 0) adjustZoom(event.deltaY < 0 ? 1 : -1)
       }}
     >
-      {loading && <div className="pdf-loading"><LoaderCircle className="spin" /> Préparation du document…</div>}
+      {loading &&       <div className="pdf-loading"><LoaderCircle className="spin" /> {t('Préparation du document…')}</div>}
       {zoomError && <div className="pdf-zoom-error" role="alert">{zoomError}</div>}
-      <div className="pdf-toolbar" aria-label="Commandes de zoom PDF" title="Utilise Ctrl + molette pour zoomer">
-        <button className="pdf-zoom-button" aria-label="Zoom arrière" title="Zoom arrière" disabled={zoomLocked || zoomLoading || zoomSaving || zoom <= MIN_PDF_ZOOM} onClick={() => adjustZoom(-1)}><ZoomOut size={16} /></button>
+      <div className="pdf-toolbar" aria-label={t('Commandes de zoom PDF')} title={t('Utilise Ctrl + molette pour zoomer')}>
+        <button className="pdf-zoom-button" aria-label={t('Zoom arrière')} title={t('Zoom arrière')} disabled={zoomLocked || zoomLoading || zoomSaving || zoom <= MIN_PDF_ZOOM} onClick={() => adjustZoom(-1)}><ZoomOut size={16} /></button>
         <span className="pdf-zoom-value">{Math.round(zoom * 100)}%</span>
-        <button className={`pdf-zoom-button${zoomLocked ? ' pdf-zoom-locked' : ''}`} aria-label={zoomLocked ? 'Déverrouiller le zoom de cette collection' : 'Verrouiller le zoom pour cette collection'} title={zoomLocked ? 'Déverrouiller le zoom de cette collection' : 'Verrouiller le zoom pour cette collection'} aria-pressed={zoomLocked} disabled={zoomLoading || zoomSaving} onClick={() => void toggleZoomLock()}>{zoomLocked ? <LockKeyhole size={15} /> : <LockKeyholeOpen size={15} />}</button>
-        <button className="pdf-zoom-button" aria-label="Zoom avant" title="Zoom avant" disabled={zoomLocked || zoomLoading || zoomSaving || zoom >= MAX_PDF_ZOOM} onClick={() => adjustZoom(1)}><ZoomIn size={16} /></button>
-        <button className="pdf-zoom-button pdf-zoom-reset" aria-label={paged ? 'Ajuster à la page' : 'Ajuster à la largeur'} title={paged ? 'Ajuster à la page' : 'Ajuster à la largeur'} disabled={zoomLocked || zoomLoading || zoomSaving} onClick={() => setZoom(1)}><RotateCcw size={14} /><span>Ajuster</span></button>
+        <button className={`pdf-zoom-button${zoomLocked ? ' pdf-zoom-locked' : ''}`} aria-label={t(zoomLocked ? 'Déverrouiller le zoom de cette collection' : 'Verrouiller le zoom pour cette collection')} title={t(zoomLocked ? 'Déverrouiller le zoom de cette collection' : 'Verrouiller le zoom pour cette collection')} aria-pressed={zoomLocked} disabled={zoomLoading || zoomSaving} onClick={() => void toggleZoomLock()}>{zoomLocked ? <LockKeyhole size={15} /> : <LockKeyholeOpen size={15} />}</button>
+        <button className="pdf-zoom-button" aria-label={t('Zoom avant')} title={t('Zoom avant')} disabled={zoomLocked || zoomLoading || zoomSaving || zoom >= MAX_PDF_ZOOM} onClick={() => adjustZoom(1)}><ZoomIn size={16} /></button>
+        <button className="pdf-zoom-button pdf-zoom-reset" aria-label={t(paged ? 'Ajuster à la page' : 'Ajuster à la largeur')} title={t(paged ? 'Ajuster à la page' : 'Ajuster à la largeur')} disabled={zoomLocked || zoomLoading || zoomSaving} onClick={() => setZoom(1)}><RotateCcw size={14} /><span>{t('Ajuster')}</span></button>
         <span className="pdf-page-count">{activePage} / {pageSizes.length || '—'}</span>
       </div>
       <div className={`pdf-pages${paged ? ' pdf-pages-paged' : ''}`} ref={scrollRef} onScroll={updateVisiblePage}>
@@ -613,6 +666,7 @@ export default function Reader({ book, collectionKind, previousChapter, nextChap
   const readerRef = useRef<HTMLElement>(null)
   const closeCallback = useRef(onClose)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const { t } = useUiLanguage()
   const [fullscreenError, setFullscreenError] = useState('')
 
   useLayoutEffect(() => {
@@ -646,14 +700,14 @@ export default function Reader({ book, collectionKind, previousChapter, nextChap
         await readerRef.current?.requestFullscreen()
       }
     } catch (reason) {
-      setFullscreenError(reason instanceof Error ? reason.message : 'Le mode plein écran n’a pas pu être activé.')
+      setFullscreenError(t(reason instanceof Error ? reason.message : 'Le mode plein écran n’a pas pu être activé.'))
     }
   }
 
   return (
-    <section ref={readerRef} className={`reader-overlay${isFullscreen ? ' reader-fullscreen' : ''}`} aria-label={`Lecture de ${book.title}`}>
+    <section ref={readerRef} className={`reader-overlay${isFullscreen ? ' reader-fullscreen' : ''}`} aria-label={t('Lecture de {title}', { title: book.title })}>
       <header className="reader-header">
-        <button className="reader-back" onClick={onClose}><ArrowLeft size={17} /><span>Retour</span></button>
+        <button className="reader-back" onClick={onClose}><ArrowLeft size={17} /><span>{t('Retour')}</span></button>
         <div className="reader-heading" title={`${book.series} / ${book.chapter || book.title}`}>
           <span>{book.series}</span><i>/</i><strong>{book.chapter || book.title}</strong>
         </div>
@@ -662,27 +716,27 @@ export default function Reader({ book, collectionKind, previousChapter, nextChap
             <ChapterNavigation previousChapter={previousChapter} nextChapter={nextChapter} onNavigateChapter={onNavigateChapter} />
           </div>
           <span className="reader-format">{book.format}</span>
-          <button className="reader-fullscreen-button" aria-label="Passer en plein écran" title="Plein écran" onClick={() => void toggleFullscreen()}>
+          <button className="reader-fullscreen-button" aria-label={t('Passer en plein écran')} title={t('Plein écran')} onClick={() => void toggleFullscreen()}>
             <Maximize size={16} />
           </button>
         </div>
       </header>
       {isFullscreen && (
         <div className="reader-fullscreen-controls">
-          <div className="reader-fullscreen-chapter-navigation" aria-label="Navigation entre les chapitres">
+          <div className="reader-fullscreen-chapter-navigation" aria-label={t('Navigation entre les chapitres')}>
             <ChapterNavigation previousChapter={previousChapter} nextChapter={nextChapter} onNavigateChapter={onNavigateChapter} />
           </div>
-          <button className="reader-fullscreen-exit" aria-label="Quitter le plein écran" title="Quitter le plein écran (Échap)" onClick={() => void toggleFullscreen()}>
-            <Minimize size={17} /><span>Quitter le plein écran</span>
+          <button className="reader-fullscreen-exit" aria-label={t('Quitter le plein écran')} title={t('Quitter le plein écran (Échap)')} onClick={() => void toggleFullscreen()}>
+            <Minimize size={17} /><span>{t('Quitter le plein écran')}</span>
           </button>
         </div>
       )}
       {fullscreenError && <div className="reader-fullscreen-error" role="alert">{fullscreenError}</div>}
-      {error && <div className="reader-fullscreen-error" role="alert">{error}</div>}
+      {error && <div className="reader-fullscreen-error" role="alert">{t(error)}</div>}
       <div className="reader-body">
-        {book.format === 'PDF' && <PdfReader key={book.id} book={book} collectionKind={collectionKind} onProgress={reportProgress} />}
-        {book.format === 'CBZ' && <CbzReader key={book.id} book={book} collectionKind={collectionKind} onProgress={reportProgress} />}
-        {book.format === 'EPUB' && <EpubReader key={book.id} book={book} collectionKind={collectionKind} onProgress={reportProgress} />}
+        {book.format === 'PDF' && <PdfReader key={book.id} book={book} collectionKind={collectionKind} onClose={onClose} onProgress={reportProgress} />}
+        {book.format === 'CBZ' && <CbzReader key={book.id} book={book} collectionKind={collectionKind} onClose={onClose} onProgress={reportProgress} />}
+        {book.format === 'EPUB' && <EpubReader key={book.id} book={book} collectionKind={collectionKind} onClose={onClose} onProgress={reportProgress} />}
       </div>
     </section>
   )

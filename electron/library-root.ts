@@ -6,23 +6,15 @@ function isMissingFile(reason: unknown): boolean {
   return typeof reason === 'object' && reason !== null && 'code' in reason && reason.code === 'ENOENT'
 }
 
-export async function saveLibraryRoot(settingsPath: string, libraryRoot: string): Promise<void> {
-  const temporaryPath = `${settingsPath}.${randomUUID()}.tmp`
-  await writeFile(temporaryPath, `${JSON.stringify({ libraryRoot }, null, 2)}\n`, 'utf8')
-  await rename(temporaryPath, settingsPath)
-}
+type SavedLibraryRoot = { configured: false } | { configured: true; path: string | null }
 
-export async function initializeLibraryRoot(userDataPath: string): Promise<string | null> {
-  const settingsPath = path.join(userDataPath, 'settings.json')
+async function readSavedLibraryRoot(settingsPath: string): Promise<SavedLibraryRoot> {
   let contents: string
   try {
     contents = await readFile(settingsPath, 'utf8')
   } catch (reason) {
-    if (!isMissingFile(reason)) throw reason
-    const libraryRoot = path.join(userDataPath, 'Bibliotheque')
-    await mkdir(libraryRoot, { recursive: true })
-    await saveLibraryRoot(settingsPath, libraryRoot)
-    return libraryRoot
+    if (isMissingFile(reason)) return { configured: false }
+    throw reason
   }
 
   const settings: unknown = JSON.parse(contents)
@@ -34,9 +26,31 @@ export async function initializeLibraryRoot(userDataPath: string): Promise<strin
   try {
     const info = await stat(settings.libraryRoot)
     if (!info.isDirectory()) throw new Error('Le chemin de bibliothèque enregistré ne correspond pas à un dossier.')
-    return settings.libraryRoot
+    return { configured: true, path: settings.libraryRoot }
   } catch (reason) {
-    if (isMissingFile(reason)) return null
+    if (isMissingFile(reason)) return { configured: true, path: null }
     throw reason
   }
+}
+
+export async function saveLibraryRoot(settingsPath: string, libraryRoot: string): Promise<void> {
+  const temporaryPath = `${settingsPath}.${randomUUID()}.tmp`
+  await writeFile(temporaryPath, `${JSON.stringify({ libraryRoot }, null, 2)}\n`, 'utf8')
+  await rename(temporaryPath, settingsPath)
+}
+
+export async function retryLibraryRoot(settingsPath: string): Promise<string | null> {
+  const saved = await readSavedLibraryRoot(settingsPath)
+  return saved.configured ? saved.path : null
+}
+
+export async function initializeLibraryRoot(userDataPath: string): Promise<string | null> {
+  const settingsPath = path.join(userDataPath, 'settings.json')
+  const saved = await readSavedLibraryRoot(settingsPath)
+  if (saved.configured) return saved.path
+
+  const libraryRoot = path.join(userDataPath, 'Bibliotheque')
+  await mkdir(libraryRoot, { recursive: true })
+  await saveLibraryRoot(settingsPath, libraryRoot)
+  return libraryRoot
 }

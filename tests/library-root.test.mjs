@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { initializeLibraryRoot, saveLibraryRoot } from '../dist-electron/library-root.js'
+import { initializeLibraryRoot, retryLibraryRoot, saveLibraryRoot } from '../dist-electron/library-root.js'
 
 test('la bibliothèque par défaut est créée et conservée au redémarrage', async () => {
   const userData = await mkdtemp(path.join(os.tmpdir(), 'yomu-root-test-'))
@@ -39,6 +39,33 @@ test('un dossier enregistré manquant ne réinitialise pas la bibliothèque', as
     await saveLibraryRoot(settingsPath, missing)
     assert.equal(await initializeLibraryRoot(userData), null)
     assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')), { libraryRoot: missing })
+    await assert.rejects(stat(path.join(userData, 'Bibliotheque')), { code: 'ENOENT' })
+  } finally {
+    await rm(userData, { recursive: true, force: true })
+  }
+})
+
+test('réessayer reconnecte le dossier enregistré sans créer de bibliothèque par défaut', async () => {
+  const userData = await mkdtemp(path.join(os.tmpdir(), 'yomu-root-test-'))
+  try {
+    const missing = path.join(userData, 'disque-indisponible')
+    const settingsPath = path.join(userData, 'settings.json')
+    await saveLibraryRoot(settingsPath, missing)
+    assert.equal(await retryLibraryRoot(settingsPath), null)
+    await assert.rejects(stat(path.join(userData, 'Bibliotheque')), { code: 'ENOENT' })
+
+    await mkdir(missing)
+    assert.equal(await retryLibraryRoot(settingsPath), missing)
+    assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')), { libraryRoot: missing })
+  } finally {
+    await rm(userData, { recursive: true, force: true })
+  }
+})
+
+test('réessayer sans réglage enregistré ne crée pas de bibliothèque par défaut', async () => {
+  const userData = await mkdtemp(path.join(os.tmpdir(), 'yomu-root-test-'))
+  try {
+    assert.equal(await retryLibraryRoot(path.join(userData, 'settings.json')), null)
     await assert.rejects(stat(path.join(userData, 'Bibliotheque')), { code: 'ENOENT' })
   } finally {
     await rm(userData, { recursive: true, force: true })

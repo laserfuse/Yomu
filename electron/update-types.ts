@@ -6,6 +6,7 @@ export interface UpdateState {
   automatic: boolean
   phase: UpdatePhase
   availableVersion: string | null
+  releaseNotes: string | null
   progress: number | null
   message: string | null
 }

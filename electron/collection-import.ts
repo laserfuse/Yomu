@@ -162,7 +162,7 @@ async function extractArchive(archivePath: string, extractionRoot: string): Prom
 export async function importCollectionArchive(
   archivePath: string,
   libraryRoot: string,
-): Promise<CollectionRecord> {
+): Promise<CollectionRecord & { chaptersAdded: number }> {
   await mkdir(libraryRoot, { recursive: true })
   const stagingDirectory = await mkdtemp(path.join(libraryRoot, '.yomu-import-'))
   try {
@@ -215,7 +215,7 @@ export async function importCollectionArchive(
     await writeFile(path.join(sourceDirectory, 'collection.json'), `${JSON.stringify({ collection, books }, null, 2)}\n`, 'utf8')
     const targetDirectory = path.join(libraryRoot, collection.folderName)
     await rename(sourceDirectory, targetDirectory)
-    return collection
+    return { ...collection, chaptersAdded: books.length }
   } finally {
     await rm(stagingDirectory, { recursive: true, force: true })
   }

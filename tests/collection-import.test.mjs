@@ -48,13 +48,14 @@ test(`l’import restaure une archive Yomu avec des chemins ${separator}`, async
         addedAt: 456,
         lastOpenedAt: 789,
         progress: 35,
-        readingPosition: { page: 7 },
+        readingPosition: { page: 7, offset: 0.625 },
       }],
     }))
     await exportCollectionArchive(sourceDirectory, archivePath, 'serie-de-test')
 
     const imported = await importCollectionArchive(archivePath, libraryRoot)
     assert.equal(imported.title, 'Série de test')
+    assert.equal(imported.chaptersAdded, 1)
     assert.notEqual(imported.id, collectionId)
     assert.notEqual(imported.folderName, 'serie-de-test')
     assert.match(imported.folderName, /^Serie-de-test-/)
@@ -67,18 +68,19 @@ test(`l’import restaure une archive Yomu avec des chemins ${separator}`, async
     assert.equal(metadata.books[0].collectionId, imported.id)
     assert.equal(metadata.books[0].relativePath, path.join(imported.folderName, 'Chapitres', 'chapitre-1.pdf'))
     assert.equal(metadata.books[0].progress, 35)
-    assert.deepEqual(metadata.books[0].readingPosition, { page: 7 })
+    assert.deepEqual(metadata.books[0].readingPosition, { page: 7, offset: 0.625 })
     assert.deepEqual([...await readFile(path.join(importedDirectory, 'Chapitres', 'chapitre-1.pdf'))], [0, 1, 2, 255])
     assert.equal(await readFile(path.join(importedDirectory, 'lecture.json'), 'utf8'), '{"lockedPdfZoom":1.25}')
 
     const reexportPath = path.join(root, 'collection-reexportee.zip')
     await exportCollectionArchive(importedDirectory, reexportPath, imported.folderName)
     const importedAgain = await importCollectionArchive(reexportPath, libraryRoot)
+    assert.equal(importedAgain.chaptersAdded, 1)
     assert.notEqual(importedAgain.id, imported.id)
     assert.notEqual(importedAgain.folderName, imported.folderName)
     const reimportedMetadata = JSON.parse(await readFile(path.join(libraryRoot, importedAgain.folderName, 'collection.json'), 'utf8'))
     assert.equal(reimportedMetadata.books[0].progress, 35)
-    assert.deepEqual(reimportedMetadata.books[0].readingPosition, { page: 7 })
+    assert.deepEqual(reimportedMetadata.books[0].readingPosition, { page: 7, offset: 0.625 })
     assert.deepEqual([...await readFile(path.join(libraryRoot, importedAgain.folderName, 'Chapitres', 'chapitre-1.pdf'))], [0, 1, 2, 255])
   } finally {
     await rm(root, { recursive: true, force: true })

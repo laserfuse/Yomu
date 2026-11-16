@@ -22,8 +22,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   position: fixed; inset: 0 auto 0 0; z-index: 3; display: flex; flex-direction: column;
   width: 250px; padding: 28px 17px 17px; color: #eeecea; background: #202127;
 }
-.brand-placeholder { display: block; width: 160px; height: 34px; flex: 0 0 auto; margin: 0 0 48px 6px; border: 1px dashed #cbd6ce; border-radius: 6px; background: #f5f8f6; }
-.brand-placeholder:focus-visible { outline: 2px solid #168d46; outline-offset: 3px; }
+.brand-logo { display: flex; width: 100%; height: 42px; flex: 0 0 auto; align-items: center; justify-content: center; margin: 0 0 48px; }
+.brand-logo img { display: block; width: 100%; height: auto; object-fit: contain; }
+.brand-logo:focus-visible { outline: 2px solid #168d46; outline-offset: 3px; }
 .title-dot { color: #d77456; }
 .sidebar-label { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; color: #888890; font-size: 9px; font-weight: 700; letter-spacing: 1.25px; }
 .main-nav { display: grid; gap: 4px; margin: 12px 0 36px; }
@@ -235,6 +236,10 @@ h1, h2, h3, p { margin: 0; }
 .epub-reader { width: min(100%, 1000px); height: 100%; padding: 15px 0; background: #f8f5ef; }
 .epub-reader iframe { background: #f8f5ef; }
 .reader-error { max-width: 480px; padding: 22px; border: 1px solid #593c37; border-radius: 7px; color: #f0c2b7; background: #342926; font-size: 12px; line-height: 1.7; }
+.reader-error > p { margin: 8px 0 14px; }
+.reader-error details { margin-bottom: 16px; }
+.reader-error summary { cursor: pointer; }
+.reader-error code { display: block; margin-top: 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .reader-loading { display: flex; align-items: center; gap: 10px; color: #c2bcb8; font-size: 12px; }
 .reader-loading.full-screen { position: fixed; inset: 0; justify-content: center; background: #18191c; }
 .spin { animation: spin 1s linear infinite; }
@@ -263,7 +268,7 @@ h1, h2, h3, p { margin: 0; }
 @media (max-width: 760px) {
   body { min-width: 360px; }
   .sidebar { position: sticky; top: 0; width: auto; height: 58px; flex-direction: row; align-items: center; padding: 0 15px; }
-  .brand-placeholder { width: 72px; height: 29px; margin: 0; }
+  .brand-logo { width: 72px; height: 29px; margin: 0; }
   .sidebar-label, .series-nav { display: none; }
   .main-nav { display: flex; gap: 3px; margin: 0 0 0 auto; }
   .nav-item { width: 34px; min-height: 34px; justify-content: center; padding: 0; }
@@ -901,6 +906,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .folder-setup-card h1 { color: #26252a; font: 700 25px/1.2 'Segoe UI', sans-serif; letter-spacing: -.7px; }
 .folder-setup-card p, .folder-setup-note { color: #817c78; font-size: 12px; line-height: 1.7; }
 .folder-setup-card .button-primary { min-height: 40px; margin-top: 4px; padding: 0 16px; }
+.folder-setup-actions { display: grid; width: 100%; gap: 9px; margin-top: 4px; }
+.folder-setup-actions button { width: 100%; min-height: 40px; }
 .folder-setup-note { color: #a19a94; font-size: 10px; }
 .folder-setup > .reader-loading { display: grid; min-height: 100vh; place-items: center; color: #817c78; font-size: 12px; }
 
@@ -1087,12 +1094,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .settings-update-preference .settings-version { margin-left: auto; color: #768279; font: 10px/1.6 'Segoe UI', sans-serif; }
 .settings-update-status-text, .settings-update-preference-copy > span { color: #768279; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 .settings-update-status-text { flex: 1 1 180px; }
+.settings-update-progress { width: 100%; height: 8px; accent-color: #1a9e4e; }
+.settings-update-notes { width: 100%; color: #536057; font-size: 10px; line-height: 1.6; }
+.settings-update-notes summary { cursor: pointer; font-weight: 600; }
+.settings-update-notes p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .settings-update-preference { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; padding-top: 14px; border-top: 1px solid #e6ebe7; }
 .settings-update-preference-copy { display: grid; gap: 6px; }
 .settings-update-toggle { display: flex; align-items: center; gap: 8px; color: #536057; font-size: 11px; font-weight: 600; }
 .settings-update-toggle input { accent-color: #48765a; }
 .settings-update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .settings-update-actions button:disabled { cursor: not-allowed; opacity: .6; }
+.settings-language-preferences { grid-template-columns: minmax(0, 1fr) minmax(180px, 260px); align-items: center; }
+.settings-language-select { display: grid; gap: 6px; color: #536057; font-size: 10px; font-weight: 600; }
+.settings-language-select select { min-height: 34px; padding: 0 10px; border: 1px solid #dce5de; border-radius: 6px; color: #536057; background: #fff; font-size: 10px; }
+.settings-language-select select:disabled { cursor: wait; opacity: .6; }
 .settings-card-copy { display: grid; min-width: 0; gap: 7px; }
 .settings-card-copy strong { color: #344139; font-size: 13px; }
 .settings-card-copy > span, .settings-note { color: #768279; font-size: 10px; line-height: 1.6; }

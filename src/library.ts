@@ -37,6 +37,10 @@ export interface LibraryBook {
 export type StoredBook = Omit<LibraryBook, 'file'>
 export type StoredCollection = Omit<LibraryCollection, 'cover'>
 
+export interface CollectionImportResult extends StoredCollection {
+  chaptersAdded: number
+}
+
 export function getChapterNumber(chapter: string): number | null {
   const match = chapter.match(/(?:chapter|chapitre|ch\.?|episode|ep\.?|tome|volume|vol\.?)\s*[-_#.]?\s*(\d+(?:[.,]\d+)?)/i)
     ?? chapter.match(/^\s*(\d+(?:[.,]\d+)?)(?:\s|$)/)

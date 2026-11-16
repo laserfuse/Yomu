@@ -1,4 +1,6 @@
-import type { ChapterLanguage, LibraryBook, LibraryCollection, StoredBook, StoredCollection } from './library'
+import type { ChapterLanguage, CollectionImportResult, LibraryBook, LibraryCollection, StoredBook, StoredCollection } from './library'
+import type { LanguageVisibility } from '../electron/language-settings'
+import type { UiLanguage } from '../electron/ui-language'
 import type { UpdateState } from '../electron/update-types'
 
 interface YomuDesktopApi {
@@ -8,12 +10,17 @@ interface YomuDesktopApi {
   checkForUpdates(): Promise<void>
   downloadUpdate(): Promise<void>
   installUpdate(): Promise<void>
+  getLanguageVisibility(): Promise<LanguageVisibility>
+  setLanguageVisibility(visibility: LanguageVisibility): Promise<void>
+  getUiLanguage(): Promise<UiLanguage>
+  setUiLanguage(language: UiLanguage): Promise<void>
   onUpdateState(callback: (state: UpdateState) => void): () => void
   getLibraryRoot(): Promise<string | null>
   chooseLibraryRoot(): Promise<string | null>
+  retryLibraryRoot(): Promise<string | null>
   openLibraryRoot(): Promise<void>
   exportCollection(collectionId: string): Promise<string | null>
-  importCollection(): Promise<StoredCollection | null>
+  importCollection(): Promise<CollectionImportResult | null>
   loadLibrary(): Promise<{ collections: StoredCollection[]; books: StoredBook[] }>
   getPdfZoom(collectionId: string): Promise<number | null>
   setPdfZoom(collectionId: string, zoom: number | null): Promise<void>

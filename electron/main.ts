@@ -8,7 +8,9 @@ import { exportCollectionArchive } from './collection-export.js'
 import { importCollectionArchive } from './collection-import.js'
 import { withCollectionWriteLock } from './collection-lock.js'
 import { readLockedPdfZoom, writeLockedPdfZoom } from './reading-settings.js'
-import { initializeLibraryRoot, saveLibraryRoot } from './library-root.js'
+import { initializeLibraryRoot, retryLibraryRoot, saveLibraryRoot } from './library-root.js'
+import { isLanguageVisibility, readLanguageVisibility, saveLanguageVisibility } from './language-settings.js'
+import { isUiLanguage, readUiLanguage, saveUiLanguage } from './ui-language.js'
 import { validReadingPosition } from './reading-position.js'
 import type { ReadingPosition } from './reading-position.js'
 import electronUpdater from 'electron-updater'
@@ -52,12 +54,27 @@ interface CollectionDirectory {
 }
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url))
-if (app.isPackaged) {
+const e2eProfilePath = process.env.YOMU_E2E_PROFILE
+if (e2eProfilePath && app.isPackaged) {
+  throw new Error('Le profil de test de bout en bout ne peut être utilisé qu’en développement.')
+}
+if (e2eProfilePath) {
+  const profilePath = path.resolve(e2eProfilePath)
+  app.setPath('appData', profilePath)
+  app.setPath('userData', path.join(profilePath, app.getName()))
+} else if (app.isPackaged) {
   app.setPath('userData', path.join(app.getPath('appData'), `${app.getName()}-installed`))
 }
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
+const languageSettingsPath = path.join(app.getPath('userData'), 'language-settings.json')
+const uiLanguageSettingsPath = path.join(app.getPath('userData'), 'ui-language.json')
+const collectionLockDirectory = path.join(app.getPath('appData'), 'Yomu', 'collection-locks')
 const IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
 let libraryRoot: string | null = null
+
+async function dialogText(french: string, english: string): Promise<string> {
+  return await readUiLanguage(uiLanguageSettingsPath) === 'en' ? english : french
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -173,7 +190,10 @@ function parseChapterTitle(fileName: string): { title: string; chapter: string }
 }
 
 async function chooseLibraryRoot(): Promise<string | null> {
-  const options: OpenDialogOptions = { title: 'Choisis le dossier de ta bibliothèque Yomu', properties: ['openDirectory', 'createDirectory'] }
+  const options: OpenDialogOptions = {
+    title: await dialogText('Choisis le dossier de ta bibliothèque Yomu', 'Choose your Yomu library folder'),
+    properties: ['openDirectory', 'createDirectory'],
+  }
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
     : await dialog.showOpenDialog(options)
@@ -191,7 +211,7 @@ async function saveCollection(
   coverName: string | null,
   removeCover: boolean,
 ): Promise<CollectionRecord> {
-  return withCollectionWriteLock(input.id, async () => {
+  return withCollectionWriteLock(collectionLockDirectory, requireRoot(), input.id, async () => {
   if (!input.title.trim()) throw new Error('Le titre de la collection est obligatoire.')
   const existingFolder = input.folderName || undefined
   const previous = existingFolder ? await readCollectionDirectory(existingFolder) : null
@@ -252,16 +272,16 @@ async function addChapters(collectionId: string, language: ChapterLanguage): Pro
   if (!collection) throw new Error('Cette collection est introuvable.')
 
   const options: OpenDialogOptions = {
-    title: `Ajouter des chapitres à ${collection.title}`,
+    title: await dialogText(`Ajouter des chapitres à ${collection.title}`, `Add chapters to ${collection.title}`),
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Chapitres Yomu', extensions: ['pdf', 'cbz', 'epub'] }],
+    filters: [{ name: await dialogText('Chapitres Yomu', 'Yomu chapters'), extensions: ['pdf', 'cbz', 'epub'] }],
   }
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
     : await dialog.showOpenDialog(options)
   if (result.canceled || result.filePaths.length === 0) return []
 
-  return withCollectionWriteLock(collectionId, async () => {
+  return withCollectionWriteLock(collectionLockDirectory, requireRoot(), collectionId, async () => {
     const latestLibrary = await loadLibrary()
     const latestCollection = latestLibrary.collections.find((entry) => entry.id === collectionId)
     if (!latestCollection) throw new Error('Cette collection est introuvable.')
@@ -329,8 +349,22 @@ function registerHandlers() {
   ipcMain.handle('updates:check', () => updates.check())
   ipcMain.handle('updates:download', () => updates.download())
   ipcMain.handle('updates:install', () => updates.install())
+  ipcMain.handle('preferences:get-language-visibility', () => readLanguageVisibility(languageSettingsPath))
+  ipcMain.handle('preferences:set-language-visibility', async (_event, visibility: unknown) => {
+    if (!isLanguageVisibility(visibility)) throw new Error('Le réglage des langues visibles est invalide.')
+    await saveLanguageVisibility(languageSettingsPath, visibility)
+  })
+  ipcMain.handle('preferences:get-ui-language', () => readUiLanguage(uiLanguageSettingsPath))
+  ipcMain.handle('preferences:set-ui-language', async (_event, language: unknown) => {
+    if (!isUiLanguage(language)) throw new Error('Le réglage de langue de l’application est invalide.')
+    await saveUiLanguage(uiLanguageSettingsPath, language)
+  })
   ipcMain.handle('library:get-root', () => libraryRoot)
   ipcMain.handle('library:choose-root', () => chooseLibraryRoot())
+  ipcMain.handle('library:retry-root', async () => {
+    libraryRoot = await retryLibraryRoot(settingsPath)
+    return libraryRoot
+  })
   ipcMain.handle('library:open-root', async () => {
     const openError = await shell.openPath(requireRoot())
     if (openError) throw new Error(`Le dossier de bibliothèque n’a pas pu être ouvert : ${openError}`)
@@ -342,9 +376,9 @@ function registerHandlers() {
 
     const sourceDirectory = safePath(collection.folderName)
     const options: SaveDialogOptions = {
-      title: `Exporter « ${collection.title} »`,
+      title: await dialogText(`Exporter « ${collection.title} »`, `Export “${collection.title}”`),
       defaultPath: path.join(app.getPath('downloads'), `${slug(collection.title)}.zip`),
-      filters: [{ name: 'Archive ZIP', extensions: ['zip'] }],
+      filters: [{ name: await dialogText('Archive ZIP', 'ZIP archive'), extensions: ['zip'] }],
     }
     const result = mainWindow
       ? await dialog.showSaveDialog(mainWindow, options)
@@ -356,9 +390,9 @@ function registerHandlers() {
   })
   ipcMain.handle('library:import-collection', async () => {
     const options: OpenDialogOptions = {
-      title: 'Choisis une archive ZIP de collection Yomu',
+      title: await dialogText('Choisis une archive ZIP de collection Yomu', 'Choose a Yomu collection ZIP archive'),
       properties: ['openFile'],
-      filters: [{ name: 'Archive ZIP', extensions: ['zip'] }],
+      filters: [{ name: await dialogText('Archive ZIP', 'ZIP archive'), extensions: ['zip'] }],
     }
     const result = mainWindow
       ? await dialog.showOpenDialog(mainWindow, options)
@@ -378,7 +412,7 @@ function registerHandlers() {
     if (zoom !== null && typeof zoom !== 'number') throw new Error('La valeur du zoom est invalide.')
     const collection = (await loadLibrary()).collections.find((entry) => entry.id === collectionId)
     if (!collection) throw new Error('Cette collection est introuvable.')
-    await writeLockedPdfZoom(safePath(collection.folderName), zoom)
+    await withCollectionWriteLock(collectionLockDirectory, requireRoot(), collectionId, () => writeLockedPdfZoom(safePath(collection.folderName), zoom))
   })
   ipcMain.handle('library:save-collection', (_event, collection, coverBytes, coverName, removeCover) => {
     if (!isRecord(collection) || typeof collection.id !== 'string'
@@ -402,7 +436,7 @@ function registerHandlers() {
   })
   ipcMain.handle('library:delete-collection', async (_event, id: unknown) => {
     if (typeof id !== 'string') throw new Error('Identifiant de collection invalide.')
-    await withCollectionWriteLock(id, async () => {
+    await withCollectionWriteLock(collectionLockDirectory, requireRoot(), id, async () => {
       const library = await loadLibrary()
       const collection = library.collections.find((entry) => entry.id === id)
       if (!collection) return
@@ -416,7 +450,7 @@ function registerHandlers() {
   })
   ipcMain.handle('library:update-book', async (_event, input: unknown) => {
     if (!validBook(input)) throw new Error('Les informations de ce chapitre sont invalides.')
-    await withCollectionWriteLock(input.collectionId, async () => {
+    await withCollectionWriteLock(collectionLockDirectory, requireRoot(), input.collectionId, async () => {
       const library = await loadLibrary()
       const directory = library.collections.find((entry) => entry.id === input.collectionId)
       if (!directory) throw new Error('La collection de ce chapitre est introuvable.')
@@ -432,7 +466,7 @@ function registerHandlers() {
     const library = await loadLibrary()
     for (const collection of library.collections) {
       if (!library.books.some((book) => book.id === id && book.collectionId === collection.id)) continue
-      await withCollectionWriteLock(collection.id, async () => {
+      await withCollectionWriteLock(collectionLockDirectory, requireRoot(), collection.id, async () => {
         const latestLibrary = await loadLibrary()
         const latestCollection = latestLibrary.collections.find((entry) => entry.id === collection.id)
         if (!latestCollection) return
@@ -458,6 +492,7 @@ async function createWindow() {
     height: 960,
     minWidth: 850,
     minHeight: 640,
+    icon: path.join(appDirectory, '..', 'dist', 'yomu-app.ico'),
     backgroundColor: '#f5f7f5',
     autoHideMenuBar: true,
     webPreferences: {

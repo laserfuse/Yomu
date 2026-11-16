@@ -1,7 +1,7 @@
 {
   "name": "yomu",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "license": "CC-BY-NC-4.0",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -13,9 +13,12 @@
     "desktop:dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1 --port 5175 --strictPort\" \"wait-on http://127.0.0.1:5175 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron .\"",
     "package:win": "npm run build:desktop && electron-builder --win nsis",
     "test:reading-settings": "npm run build:electron && node --test tests/reading-settings.test.mjs",
+    "test:language-settings": "npm run build:electron && node --test tests/language-settings.test.mjs",
+    "test:ui-language": "npm run build:electron && node --test tests/ui-language.test.mjs",
     "test:reading-position": "npm run build:electron && node --test tests/reading-position.test.mjs",
     "test:collection-lock": "npm run build:electron && node --test tests/collection-lock.test.mjs",
     "test:library-root": "npm run build:electron && node --test tests/library-root.test.mjs",
+    "test:e2e": "npm run build:desktop && node --test tests/e2e-smoke.test.mjs",
     "test:build-assets": "node --test tests/build-assets.test.mjs",
     "test:updates": "npm run build:electron && node --test tests/updates.test.mjs",
     "lint": "oxlint",
@@ -35,7 +38,9 @@
       "package.json"
     ],
     "win": {
-      "target": "nsis"
+      "icon": "public/yomu-app.ico",
+      "target": "nsis",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "publish": [
       {
@@ -55,6 +60,7 @@
     "jszip": "^3.10.2",
     "lucide-react": "^1.72.0",
     "pdfjs-dist": "^6.5.438",
+    "proper-lockfile": "^4.1.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "simple-icons": "^16.37.0",
@@ -66,6 +72,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/yauzl": "^3.4.0",
@@ -75,6 +82,7 @@
     "electron": "^45.3.0",
     "electron-builder": "^26.18.0",
     "oxlint": "^1.90.0",
+    "playwright": "^1.65.1",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
     "wait-on": "^9.0.3"

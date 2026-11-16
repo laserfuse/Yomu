@@ -25,3 +25,22 @@ test('la compilation web ne partage pas son dossier avec les installateurs', asy
   const fromWebOutput = path.relative(path.resolve('dist'), output)
   assert.ok(fromWebOutput && (fromWebOutput === '..' || fromWebOutput.startsWith(`..${path.sep}`) || path.isAbsolute(fromWebOutput)))
 })
+
+test('le nom de l’installateur Windows est compatible avec les mises à jour', async () => {
+  const packageJson = JSON.parse(await readFile('package.json', 'utf8'))
+  const artifactName = packageJson.build.win.artifactName
+  assert.equal(artifactName, '${productName}-Setup-${version}.${ext}')
+
+  const installerName = artifactName
+    .replace('${productName}', packageJson.build.productName)
+    .replace('${version}', packageJson.version)
+    .replace('${ext}', 'exe')
+  assert.equal(installerName, `Yomu-Setup-${packageJson.version}.exe`)
+  assert.doesNotMatch(installerName, /\s/)
+})
+
+test('l’icône Windows est disponible pour la fenêtre et l’installateur', async () => {
+  const packageJson = JSON.parse(await readFile('package.json', 'utf8'))
+  assert.ok((await stat(path.resolve(packageJson.build.win.icon))).isFile())
+  assert.ok((await stat(path.resolve('dist', 'yomu-app.ico'))).isFile())
+})

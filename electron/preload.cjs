@@ -7,6 +7,10 @@ contextBridge.exposeInMainWorld('yomu', {
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
   downloadUpdate: () => ipcRenderer.invoke('updates:download'),
   installUpdate: () => ipcRenderer.invoke('updates:install'),
+  getLanguageVisibility: () => ipcRenderer.invoke('preferences:get-language-visibility'),
+  setLanguageVisibility: (visibility) => ipcRenderer.invoke('preferences:set-language-visibility', visibility),
+  getUiLanguage: () => ipcRenderer.invoke('preferences:get-ui-language'),
+  setUiLanguage: (language) => ipcRenderer.invoke('preferences:set-ui-language', language),
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state)
     ipcRenderer.on('updates:state', listener)
@@ -14,6 +18,7 @@ contextBridge.exposeInMainWorld('yomu', {
   },
   getLibraryRoot: () => ipcRenderer.invoke('library:get-root'),
   chooseLibraryRoot: () => ipcRenderer.invoke('library:choose-root'),
+  retryLibraryRoot: () => ipcRenderer.invoke('library:retry-root'),
   openLibraryRoot: () => ipcRenderer.invoke('library:open-root'),
   exportCollection: (collectionId) => ipcRenderer.invoke('library:export-collection', collectionId),
   importCollection: () => ipcRenderer.invoke('library:import-collection'),

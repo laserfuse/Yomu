@@ -1,4 +1,4 @@
-# Yomu
+# ![Yomu](src/assets/yomu-sidebar-logo.png)
 
 **Ta bibliothèque de mangas et de manhwas, directement sur ton PC.**
 
@@ -21,7 +21,8 @@ De l’intelligence artificielle a été utilisée lors du développement de ce 
 
 - **Bibliothèque personnelle** : crée des collections avec un titre, une couverture, un type et un statut de lecture.
 - **Formats pris en charge** : lis tes chapitres PDF, CBZ et EPUB dans l’application.
-- **Organisation** : recherche et filtre tes collections, trie tes chapitres et indique leur langue (français ou anglais).
+- **Organisation** : recherche et filtre tes collections, trie tes chapitres et choisis dans les paramètres d’afficher les catégories françaises et anglaises ou une seule. Masquer une catégorie ne supprime aucun chapitre.
+- **Langue de l’interface** : choisis le français ou l’anglais dans les paramètres. Le choix est mémorisé et indépendant des catégories de langue des chapitres.
 - **Import et export** : ajoute des chapitres depuis ton PC et transfère une collection complète avec une archive ZIP Yomu.
 - **Lecture personnalisée** : passe au chapitre précédent ou suivant, profite du plein écran et, pour les PDF, ajuste le zoom ou verrouille-le pour toute une collection.
 - **Mises à jour** : consulte la disponibilité d’une nouvelle version depuis les paramètres et choisis quand la télécharger et l’installer.
@@ -97,26 +98,33 @@ Le téléchargement ne commence que lorsque tu cliques sur **Télécharger la mi
 - [x] Version lue depuis l'état Electron (plus de valeur codée en dur)
 - [x] Test réel de mise à jour v0.0.1 vers v0.0.2
 
+#### v0.0.3 — travaux locaux (pas encore publiée)
+- [x] Version du projet portée à 0.0.3
+- [x] Nom d'installateur Windows sans espaces, vérifié par un test
+- [x] Logo latéral et icône de l'application intégrés
+- [x] Reconnexion guidée d'une bibliothèque introuvable, avec option de choisir un autre dossier
+- [x] Sérialisation des écritures de collection entre plusieurs processus
+- [x] Confirmation explicite avant la suppression définitive d'une collection
+- [x] Reprise PDF Manhwa à la position relative exacte dans la page
+- [x] Mises à jour : notes de version, progression visuelle et messages utiles en cas d'erreur réseau ou de limite GitHub
+- [x] Erreurs du lecteur clarifiées, avec détails techniques et retour à la bibliothèque
+- [x] Import ZIP : résumé des éléments ajoutés, ignorés et en erreur
+- [x] Tri des collections par date, titre, nombre de chapitres ou progression moyenne
+- [x] Réglage global des catégories Français/Anglais, masquées sans suppression des chapitres
+- [x] Interface en français ou en anglais, avec un choix mémorisé indépendamment des catégories de langue des chapitres
+- [x] Configuration TypeScript Electron détectée par VS Code pour les types Node
+- [x] Test E2E avec profil temporaire : lecture PDF, erreurs du lecteur, import ZIP, visibilité des catégories et changement de langue de l’interface
+
 ### À faire
 
 #### Bugs et limites connus
-- [ ] Le nom de l'installateur contient des espaces : `latest.yml` pointe vers `Yomu-Setup-x.x.x.exe` et GitHub renomme le fichier, ce qui donne une erreur 404 à la mise à jour (fixer `artifactName`)
-- [ ] PDF Manhwa : la reprise se fait à la page, pas à la position exacte dans la page
-- [ ] Les écritures concurrentes sont protégées seulement dans une instance de Yomu (pas contre un autre processus)
 - [ ] Certains EPUB n'ont pas de positions textuelles : la progression se base alors sur les sections et reste approximative
-- [ ] Un dossier de bibliothèque introuvable n'est pas remplacé (reconnexion ou choix manuel possible) : simplifier le parcours de réparation
 - [ ] Changer de dossier de bibliothèque ne déplace pas les collections existantes (proposer un déplacement ou une copie)
 
 #### Options à finir ou à peaufiner
 - [ ] Les versions de Yomu antérieures au système de mise à jour doivent être mises à jour manuellement (à documenter dans les notes de release)
 - [ ] Installateur non signé : ajouter une signature de code (avertissement Windows)
-- [ ] Mises à jour : afficher les notes de version et une progression du téléchargement plus claire
-- [ ] Mises à jour : gérer proprement l'absence d'Internet et les limites de l'API GitHub
-- [ ] Suppression d'une collection : confirmation plus explicite (suppression définitive du dossier)
-- [ ] Messages d'erreur du lecteur : les rendre plus clairs et proposer une action
-- [ ] Import ZIP : afficher un résumé (éléments ajoutés, ignorés, en erreur)
 - [ ] Raccourcis clavier : les lister dans l'application et les rendre configurables
-- [ ] Test de bout en bout avec un profil et des fichiers temporaires
 
 ### Futures options
 
@@ -130,7 +138,6 @@ Le téléchargement ne commence que lorsque tu cliques sur **Télécharger la mi
 - [ ] Historique de lecture et section « Continuer la lecture » sur l'accueil
 
 #### Bibliothèque
-- [ ] Tri des collections (récent, titre, progression)
 - [ ] Étiquettes et genres personnalisés
 - [ ] Favoris et listes personnalisées
 - [ ] Statistiques de lecture (chapitres lus, temps passé)
@@ -142,7 +149,6 @@ Le téléchargement ne commence que lorsque tu cliques sur **Télécharger la mi
 
 #### Interface et application
 - [ ] Thème clair et choix de la couleur d'accent
-- [ ] Interface disponible en anglais
 - [ ] Sauvegarde et restauration de toute la bibliothèque en une fois (aujourd'hui : export ZIP collection par collection)
 - [ ] Synchronisation optionnelle entre appareils (aujourd'hui : bibliothèque 100 % locale, transfert par ZIP uniquement)
 - [ ] Choix du canal de mise à jour (stable ou préversion)
@@ -174,11 +180,16 @@ npm.cmd run test:build-assets
 npm.cmd run test:updates
 npm.cmd run test:library-root
 npm.cmd run test:reading-settings
+npm.cmd run test:language-settings
+npm.cmd run test:ui-language
 npm.cmd run test:reading-position
 npm.cmd run test:collection-lock
 npm.cmd run test:collection-export
 npm.cmd run test:collection-import
+npm.cmd run test:e2e
 ```
+
+Le test de bout en bout démarre Yomu avec un profil temporaire, importe un PDF fictif et un ZIP, puis vérifie la lecture, les erreurs du lecteur, le changement de langue de l’interface (y compris dans le lecteur) et la visibilité des catégories. Il supprime ensuite la collection. Le test ne touche pas au profil ni à la bibliothèque habituels.
 
 ### Créer l’installateur Windows
 
@@ -190,7 +201,7 @@ L’installateur est généré dans le dossier `release`, distinct des fichiers 
 
 ### Publier une mise à jour
 
-Augmente la version dans `package.json` et actualise `package-lock.json`, puis génère l’installateur sur Windows. Publie une **release GitHub publique** du dépôt `laserfuse/Yomu`, avec un tag correspondant à la version (par exemple `v0.0.2`), en joignant au minimum l’installateur `.exe` et le fichier `latest.yml` générés ensemble dans `release`. Joins aussi le fichier `.exe.blockmap` pour permettre les téléchargements différentiels. Une simple modification de la branche GitHub ne constitue pas une mise à jour. Les versions préliminaires et les brouillons ne sont pas distribués comme versions stables.
+Augmente la version dans `package.json` et actualise `package-lock.json`, puis génère l’installateur sur Windows. Publie une **release GitHub publique** du dépôt `laserfuse/Yomu`, avec un tag correspondant à la version (au format `vX.Y.Z`, par exemple `v0.0.3` pour cette version), en joignant au minimum l’installateur `.exe` et le fichier `latest.yml` générés ensemble dans `release`. Joins aussi le fichier `.exe.blockmap` pour permettre les téléchargements différentiels. Une simple modification de la branche GitHub ne constitue pas une mise à jour. Les versions préliminaires et les brouillons ne sont pas distribués comme versions stables.
 
 L’installateur n’étant pas signé, sa provenance ne bénéficie pas de la protection d’une signature de code Windows ; protège l’accès au dépôt et aux releases GitHub. Teste le parcours avec une application installée et un profil temporaire avant publication.
 

@@ -60,6 +60,24 @@ test('la vérification, le téléchargement et l’installation exigent des acti
   })
 })
 
+test('les notes de version sont conservées sous forme de texte lisible', async () => {
+  await fixture(async ({ manager, updater }) => {
+    updater.checkForUpdates = async () => ({
+      isUpdateAvailable: true,
+      updateInfo: { version: '0.0.2', releaseNotes: [{ version: '0.0.2', note: 'Correction de bugs' }, { version: '0.0.1', note: null }] },
+    })
+    await manager.check()
+    assert.equal(manager.snapshot().releaseNotes, '0.0.2\nCorrection de bugs')
+
+    updater.checkForUpdates = async () => ({
+      isUpdateAvailable: true,
+      updateInfo: { version: '0.0.3', releaseNotes: 'Nouvelles fonctionnalités\nAméliorations' },
+    })
+    await manager.check()
+    assert.equal(manager.snapshot().releaseNotes, 'Nouvelles fonctionnalités\nAméliorations')
+  })
+})
+
 test('une version à jour et les erreurs réseau sont clairement distinguées', async () => {
   await fixture(async ({ manager, updater }) => {
     updater.checkForUpdates = async () => ({ isUpdateAvailable: false, updateInfo: { version: '0.0.1' } })
@@ -70,6 +88,24 @@ test('une version à jour et les erreurs réseau sont clairement distinguées', 
     assert.equal(manager.snapshot().phase, 'error')
     assert.match(manager.snapshot().message, /réseau indisponible/)
     await assert.rejects(manager.download(), /Aucune mise à jour/)
+  })
+})
+
+test('les erreurs de connexion et les limites GitHub indiquent comment réessayer', async () => {
+  await fixture(async ({ manager, updater }) => {
+    const connectionError = new Error('getaddrinfo ENOTFOUND api.github.com')
+    connectionError.code = 'ENOTFOUND'
+    updater.checkForUpdates = async () => { throw connectionError }
+    await manager.check()
+    assert.match(manager.snapshot().message, /Vérifie ta connexion Internet puis réessaie/)
+    assert.match(manager.snapshot().message, /ENOTFOUND/)
+
+    const rateLimitError = new Error('API rate limit exceeded')
+    rateLimitError.statusCode = 403
+    updater.checkForUpdates = async () => { throw rateLimitError }
+    await manager.check()
+    assert.match(manager.snapshot().message, /Réessaie dans quelques minutes/)
+    assert.match(manager.snapshot().message, /API rate limit exceeded/)
   })
 })
 
