@@ -98,7 +98,7 @@ Le téléchargement ne commence que lorsque tu cliques sur **Télécharger la mi
 - [x] Version lue depuis l'état Electron (plus de valeur codée en dur)
 - [x] Test réel de mise à jour v0.0.1 vers v0.0.2
 
-#### v0.0.3 — travaux locaux (pas encore publiée)
+#### v0.0.3
 - [x] Version du projet portée à 0.0.3
 - [x] Nom d'installateur Windows sans espaces, vérifié par un test
 - [x] Logo latéral et icône de l'application intégrés
