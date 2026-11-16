@@ -199,12 +199,6 @@ npm.cmd run package:win
 
 L’installateur est généré dans le dossier `release`, distinct des fichiers de compilation de `dist` afin qu’un nouveau build ne l’efface pas. Il n’est actuellement pas signé : Windows peut afficher un avertissement lors de son lancement.
 
-### Publier une mise à jour
-
-Augmente la version dans `package.json` et actualise `package-lock.json`, puis génère l’installateur sur Windows. Publie une **release GitHub publique** du dépôt `laserfuse/Yomu`, avec un tag correspondant à la version (au format `vX.Y.Z`, par exemple `v0.0.3` pour cette version), en joignant au minimum l’installateur `.exe` et le fichier `latest.yml` générés ensemble dans `release`. Joins aussi le fichier `.exe.blockmap` pour permettre les téléchargements différentiels. Une simple modification de la branche GitHub ne constitue pas une mise à jour. Les versions préliminaires et les brouillons ne sont pas distribués comme versions stables.
-
-L’installateur n’étant pas signé, sa provenance ne bénéficie pas de la protection d’une signature de code Windows ; protège l’accès au dépôt et aux releases GitHub. Teste le parcours avec une application installée et un profil temporaire avant publication.
-
 ## Stockage
 
 Chaque collection possède son propre dossier dans la bibliothèque :
