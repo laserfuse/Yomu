@@ -10,8 +10,29 @@ export interface InitialPagePosition {
   offset?: number
 }
 
+export interface MangaPageSpread {
+  startPage: number
+  endPage: number
+}
+
 export function pageFromProgress(progress: number, total: number): number {
   return Math.min(total, Math.max(1, Math.round(progress * total / 100)))
+}
+
+export function mangaPageSpread(page: number, total: number, doublePage: boolean): MangaPageSpread {
+  const pageCount = Math.max(1, Math.floor(total))
+  const currentPage = Math.min(pageCount, Math.max(1, Math.floor(page)))
+  if (!doublePage || currentPage === 1) return { startPage: currentPage, endPage: currentPage }
+  const startPage = 2 + Math.floor((currentPage - 2) / 2) * 2
+  return { startPage, endPage: Math.min(pageCount, startPage + 1) }
+}
+
+export function nextMangaSpreadPage(page: number, total: number, direction: -1 | 1): number {
+  const pageCount = Math.max(1, Math.floor(total))
+  const { startPage } = mangaPageSpread(page, pageCount, true)
+  if (direction === -1) return startPage === 2 ? 1 : Math.max(2, startPage - 2)
+  const lastSpreadStart = mangaPageSpread(pageCount, pageCount, true).startPage
+  return Math.min(lastSpreadStart, startPage === 1 ? 2 : startPage + 2)
 }
 
 export function initialPage(position: ReadingPosition | undefined, progress: number, total: number): number {

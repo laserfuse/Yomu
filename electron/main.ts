@@ -1,15 +1,20 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import type { OpenDialogOptions, SaveDialogOptions } from 'electron'
+import type { MessageBoxOptions, OpenDialogOptions, SaveDialogOptions } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportCollectionArchive } from './collection-export.js'
 import { importCollectionArchive } from './collection-import.js'
+import { createLibraryBackupArchive, restoreLibraryBackupArchive } from './library-backup.js'
 import { withCollectionWriteLock } from './collection-lock.js'
+import { collectChapterFiles, filterDuplicateChapterFiles } from './chapter-import.js'
+import { copyLibraryContents } from './library-transfer.js'
 import { readLockedPdfZoom, writeLockedPdfZoom } from './reading-settings.js'
 import { initializeLibraryRoot, retryLibraryRoot, saveLibraryRoot } from './library-root.js'
 import { isLanguageVisibility, readLanguageVisibility, saveLanguageVisibility } from './language-settings.js'
+import { isReaderShortcuts } from './reader-shortcuts.js'
+import { readReaderShortcuts, saveReaderShortcuts } from './reader-shortcut-settings.js'
 import { isUiLanguage, readUiLanguage, saveUiLanguage } from './ui-language.js'
 import { validReadingPosition } from './reading-position.js'
 import type { ReadingPosition } from './reading-position.js'
@@ -68,12 +73,20 @@ if (e2eProfilePath) {
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 const languageSettingsPath = path.join(app.getPath('userData'), 'language-settings.json')
 const uiLanguageSettingsPath = path.join(app.getPath('userData'), 'ui-language.json')
+const readerShortcutsSettingsPath = path.join(app.getPath('userData'), 'reader-shortcuts.json')
 const collectionLockDirectory = path.join(app.getPath('appData'), 'Yomu', 'collection-locks')
 const IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
+const LIBRARY_ROOT_LOCK_ID = '__yomu_library_root__'
 let libraryRoot: string | null = null
 
 async function dialogText(french: string, english: string): Promise<string> {
   return await readUiLanguage(uiLanguageSettingsPath) === 'en' ? english : french
+}
+
+async function showMessageBox(options: MessageBoxOptions) {
+  return mainWindow
+    ? dialog.showMessageBox(mainWindow, options)
+    : dialog.showMessageBox(options)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -182,6 +195,25 @@ async function loadLibrary(): Promise<{ collections: CollectionRecord[]; books: 
   }
 }
 
+async function withCollectionWriteLocks<T>(
+  root: string,
+  collectionIds: string[],
+  index: number,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (index >= collectionIds.length) return operation()
+  return withCollectionWriteLock(collectionLockDirectory, root, collectionIds[index], () =>
+    withCollectionWriteLocks(root, collectionIds, index + 1, operation),
+  )
+}
+
+async function withLibraryTransferLocks<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  return withCollectionWriteLock(collectionLockDirectory, root, LIBRARY_ROOT_LOCK_ID, async () => {
+    const collectionIds = (await loadLibrary()).collections.map((collection) => collection.id).sort()
+    return withCollectionWriteLocks(root, collectionIds, 0, operation)
+  })
+}
+
 function parseChapterTitle(fileName: string): { title: string; chapter: string } {
   const title = path.parse(fileName).name.replace(/[_]+/g, ' ').trim()
   const match = title.match(/(?:chapter|chapitre|ch\.?|episode|ep\.?|tome|volume|vol\.?)\s*[-_#.]?\s*\d+(?:[.,]\d+)?/i)
@@ -199,6 +231,60 @@ async function chooseLibraryRoot(): Promise<string | null> {
     : await dialog.showOpenDialog(options)
   if (result.canceled || !result.filePaths[0]) return null
   const selectedRoot = path.resolve(result.filePaths[0])
+  const previousRoot = libraryRoot
+  const sameRoot = previousRoot !== null
+    && path.resolve(previousRoot).toLowerCase() === selectedRoot.toLowerCase()
+  if (previousRoot && !sameRoot) {
+    const choice = await showMessageBox({
+      type: 'question',
+      title: await dialogText('Changer de bibliothèque', 'Change library'),
+      message: await dialogText(
+        'Que veux-tu faire avec la bibliothèque actuelle ?',
+        'What would you like to do with the current library?',
+      ),
+      detail: await dialogText(
+        'Copier conserve l’ancienne bibliothèque. Déplacer vérifie la copie avant de supprimer l’ancien dossier. Changer le chemin seul ne transfère aucun fichier.',
+        'Copy keeps the old library. Move verifies the copy before removing the old folder. Changing the path alone does not transfer files.',
+      ),
+      buttons: [
+        await dialogText('Copier la bibliothèque', 'Copy library'),
+        await dialogText('Déplacer la bibliothèque', 'Move library'),
+        await dialogText('Changer le chemin seulement', 'Change path only'),
+        await dialogText('Annuler', 'Cancel'),
+      ],
+      defaultId: 0,
+      cancelId: 3,
+      noLink: true,
+    })
+    if (choice.response === 3) return null
+    if (choice.response === 0 || choice.response === 1) {
+      const move = choice.response === 1
+      await mkdir(selectedRoot, { recursive: true })
+      await withLibraryTransferLocks(previousRoot, async () => {
+        await copyLibraryContents(previousRoot, selectedRoot)
+        await saveLibraryRoot(settingsPath, selectedRoot)
+        libraryRoot = selectedRoot
+        if (move) {
+          try {
+            await rm(previousRoot, { recursive: true })
+          } catch (reason) {
+            const message = reason instanceof Error ? reason.message : String(reason)
+            await showMessageBox({
+              type: 'warning',
+              title: await dialogText('Bibliothèque déplacée avec un avertissement', 'Library moved with a warning'),
+              message: await dialogText(
+                'La nouvelle bibliothèque est active, mais l’ancien dossier n’a pas pu être entièrement supprimé.',
+                'The new library is active, but the old folder could not be fully removed.',
+              ),
+              detail: message,
+              buttons: [await dialogText('OK', 'OK')],
+            })
+          }
+        }
+      })
+      return selectedRoot
+    }
+  }
   await mkdir(selectedRoot, { recursive: true })
   await saveLibraryRoot(settingsPath, selectedRoot)
   libraryRoot = selectedRoot
@@ -266,30 +352,33 @@ async function saveCollection(
   })
 }
 
-async function addChapters(collectionId: string, language: ChapterLanguage): Promise<BookRecord[]> {
+type ChapterImportResult = { books: BookRecord[]; duplicatesSkipped: number }
+
+async function addChapterPaths(
+  collectionId: string,
+  language: ChapterLanguage,
+  sourcePaths: string[],
+): Promise<ChapterImportResult> {
   const library = await loadLibrary()
   const collection = library.collections.find((entry) => entry.id === collectionId)
   if (!collection) throw new Error('Cette collection est introuvable.')
 
-  const options: OpenDialogOptions = {
-    title: await dialogText(`Ajouter des chapitres à ${collection.title}`, `Add chapters to ${collection.title}`),
-    properties: ['openFile', 'multiSelections'],
-    filters: [{ name: await dialogText('Chapitres Yomu', 'Yomu chapters'), extensions: ['pdf', 'cbz', 'epub'] }],
-  }
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
-    : await dialog.showOpenDialog(options)
-  if (result.canceled || result.filePaths.length === 0) return []
-
+  const supportedSources = await collectChapterFiles(sourcePaths)
   return withCollectionWriteLock(collectionLockDirectory, requireRoot(), collectionId, async () => {
     const latestLibrary = await loadLibrary()
     const latestCollection = latestLibrary.collections.find((entry) => entry.id === collectionId)
     if (!latestCollection) throw new Error('Cette collection est introuvable.')
     const chaptersDirectory = safePath(path.join(latestCollection.folderName, 'Chapitres'))
     await mkdir(chaptersDirectory, { recursive: true })
+    const collectionDirectory = await readCollectionDirectory(latestCollection.folderName)
+    if (!collectionDirectory) throw new Error('Le dossier de cette collection est introuvable.')
+    const { filesToImport, duplicatesSkipped } = await filterDuplicateChapterFiles(
+      collectionDirectory.books.map((book) => safePath(book.relativePath)),
+      supportedSources,
+    )
     const imported: BookRecord[] = []
 
-    for (const sourcePath of result.filePaths) {
+    for (const sourcePath of filesToImport) {
       const sourceName = path.basename(sourcePath)
       const extension = path.extname(sourceName).toLowerCase()
       const format = extension === '.pdf' ? 'PDF' : extension === '.cbz' ? 'CBZ' : extension === '.epub' ? 'EPUB' : null
@@ -316,11 +405,46 @@ async function addChapters(collectionId: string, language: ChapterLanguage): Pro
       })
     }
 
-    const collectionDirectory = await readCollectionDirectory(latestCollection.folderName)
-    if (!collectionDirectory) throw new Error('Le dossier de cette collection est introuvable.')
-    await saveCollectionDirectory({ collection: latestCollection, books: [...collectionDirectory.books, ...imported] })
-    return imported
+    if (imported.length > 0) {
+      await saveCollectionDirectory({ collection: latestCollection, books: [...collectionDirectory.books, ...imported] })
+    }
+    return { books: imported, duplicatesSkipped }
   })
+}
+
+async function addChapters(
+  collectionId: string,
+  language: ChapterLanguage,
+): Promise<ChapterImportResult> {
+  const collection = (await loadLibrary()).collections.find((entry) => entry.id === collectionId)
+  if (!collection) throw new Error('Cette collection est introuvable.')
+  const options: OpenDialogOptions = {
+    title: await dialogText(`Ajouter des chapitres à ${collection.title}`, `Add chapters to ${collection.title}`),
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: await dialogText('Chapitres Yomu', 'Yomu chapters'), extensions: ['pdf', 'cbz', 'epub'] }],
+  }
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options)
+  if (result.canceled || result.filePaths.length === 0) return { books: [], duplicatesSkipped: 0 }
+  return addChapterPaths(collectionId, language, result.filePaths)
+}
+
+async function addChapterFolder(
+  collectionId: string,
+  language: ChapterLanguage,
+): Promise<ChapterImportResult> {
+  const collection = (await loadLibrary()).collections.find((entry) => entry.id === collectionId)
+  if (!collection) throw new Error('Cette collection est introuvable.')
+  const options: OpenDialogOptions = {
+    title: await dialogText(`Choisis un dossier de chapitres pour ${collection.title}`, `Choose a chapter folder for ${collection.title}`),
+    properties: ['openDirectory'],
+  }
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options)
+  if (result.canceled || result.filePaths.length === 0) return { books: [], duplicatesSkipped: 0 }
+  return addChapterPaths(collectionId, language, result.filePaths)
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -359,6 +483,11 @@ function registerHandlers() {
     if (!isUiLanguage(language)) throw new Error('Le réglage de langue de l’application est invalide.')
     await saveUiLanguage(uiLanguageSettingsPath, language)
   })
+  ipcMain.handle('preferences:get-reader-shortcuts', () => readReaderShortcuts(readerShortcutsSettingsPath))
+  ipcMain.handle('preferences:set-reader-shortcuts', async (_event, shortcuts: unknown) => {
+    if (!isReaderShortcuts(shortcuts)) throw new Error('Les raccourcis clavier sont invalides.')
+    await saveReaderShortcuts(readerShortcutsSettingsPath, shortcuts)
+  })
   ipcMain.handle('library:get-root', () => libraryRoot)
   ipcMain.handle('library:choose-root', () => chooseLibraryRoot())
   ipcMain.handle('library:retry-root', async () => {
@@ -368,6 +497,50 @@ function registerHandlers() {
   ipcMain.handle('library:open-root', async () => {
     const openError = await shell.openPath(requireRoot())
     if (openError) throw new Error(`Le dossier de bibliothèque n’a pas pu être ouvert : ${openError}`)
+  })
+  ipcMain.handle('library:backup', async () => {
+    const root = requireRoot()
+    const date = new Date().toISOString().replace(/[:.]/g, '-')
+    const options: SaveDialogOptions = {
+      title: await dialogText('Sauvegarder toute la bibliothèque Yomu', 'Back up your entire Yomu library'),
+      defaultPath: path.join(app.getPath('downloads'), `Yomu-backup-${date}.zip`),
+      filters: [{ name: await dialogText('Sauvegarde Yomu', 'Yomu backup'), extensions: ['zip'] }],
+    }
+    const result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    await withLibraryTransferLocks(root, () => createLibraryBackupArchive(root, result.filePath))
+    return result.filePath
+  })
+  ipcMain.handle('library:restore-backup', async () => {
+    const archiveOptions: OpenDialogOptions = {
+      title: await dialogText('Choisis une sauvegarde complète Yomu', 'Choose a complete Yomu backup'),
+      properties: ['openFile'],
+      filters: [{ name: await dialogText('Sauvegarde Yomu', 'Yomu backup'), extensions: ['zip'] }],
+    }
+    const archiveResult = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, archiveOptions)
+      : await dialog.showOpenDialog(archiveOptions)
+    if (archiveResult.canceled || !archiveResult.filePaths[0]) return null
+
+    const destinationOptions: OpenDialogOptions = {
+      title: await dialogText('Choisis un nouveau dossier vide pour la restauration', 'Choose a new empty folder for the restore'),
+      properties: ['openDirectory', 'createDirectory'],
+    }
+    const destinationResult = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, destinationOptions)
+      : await dialog.showOpenDialog(destinationOptions)
+    if (destinationResult.canceled || !destinationResult.filePaths[0]) return null
+
+    const root = requireRoot()
+    const destinationRoot = path.resolve(destinationResult.filePaths[0])
+    return withLibraryTransferLocks(root, async () => {
+      await restoreLibraryBackupArchive(archiveResult.filePaths[0], destinationRoot, root)
+      await saveLibraryRoot(settingsPath, destinationRoot)
+      libraryRoot = destinationRoot
+      return destinationRoot
+    })
   })
   ipcMain.handle('library:export-collection', async (_event, collectionId: unknown) => {
     if (typeof collectionId !== 'string') throw new Error('Identifiant de collection invalide.')
@@ -398,7 +571,10 @@ function registerHandlers() {
       ? await dialog.showOpenDialog(mainWindow, options)
       : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return null
-    return importCollectionArchive(result.filePaths[0], requireRoot())
+    const root = requireRoot()
+    return withCollectionWriteLock(collectionLockDirectory, root, LIBRARY_ROOT_LOCK_ID, () =>
+      importCollectionArchive(result.filePaths[0], root),
+    )
   })
   ipcMain.handle('library:load', () => loadLibrary())
   ipcMain.handle('library:get-pdf-zoom', async (_event, collectionId: unknown) => {
@@ -427,26 +603,46 @@ function registerHandlers() {
       || typeof removeCover !== 'boolean') {
       throw new Error('Les informations de cette collection sont invalides.')
     }
-    return saveCollection(
+    const save = () => saveCollection(
       collection as unknown as Omit<CollectionRecord, 'folderName' | 'coverPath'> & { folderName?: string; coverPath?: string | null },
       coverBytes as Uint8Array | null,
       coverName as string | null,
       removeCover,
     )
+    if (typeof collection.folderName === 'string') return save()
+    const root = requireRoot()
+    return withCollectionWriteLock(collectionLockDirectory, root, LIBRARY_ROOT_LOCK_ID, save)
   })
   ipcMain.handle('library:delete-collection', async (_event, id: unknown) => {
     if (typeof id !== 'string') throw new Error('Identifiant de collection invalide.')
-    await withCollectionWriteLock(collectionLockDirectory, requireRoot(), id, async () => {
-      const library = await loadLibrary()
-      const collection = library.collections.find((entry) => entry.id === id)
-      if (!collection) return
-      await rm(safePath(collection.folderName), { recursive: true, force: true })
-    })
+    const root = requireRoot()
+    await withCollectionWriteLock(collectionLockDirectory, root, LIBRARY_ROOT_LOCK_ID, () =>
+      withCollectionWriteLock(collectionLockDirectory, root, id, async () => {
+        const library = await loadLibrary()
+        const collection = library.collections.find((entry) => entry.id === id)
+        if (!collection) return
+        await rm(safePath(collection.folderName), { recursive: true, force: true })
+      }),
+    )
   })
   ipcMain.handle('library:add-chapters', (_event, collectionId: unknown, language: unknown) => {
     if (typeof collectionId !== 'string') throw new Error('Identifiant de collection invalide.')
     if (language !== 'fr' && language !== 'en') throw new Error('La langue des chapitres est invalide.')
     return addChapters(collectionId, language)
+  })
+  ipcMain.handle('library:add-chapter-folder', (_event, collectionId: unknown, language: unknown) => {
+    if (typeof collectionId !== 'string') throw new Error('Identifiant de collection invalide.')
+    if (language !== 'fr' && language !== 'en') throw new Error('La langue des chapitres est invalide.')
+    return addChapterFolder(collectionId, language)
+  })
+  ipcMain.handle('library:add-dropped-chapters', (_event, collectionId: unknown, language: unknown, sourcePaths: unknown) => {
+    if (typeof collectionId !== 'string') throw new Error('Identifiant de collection invalide.')
+    if (language !== 'fr' && language !== 'en') throw new Error('La langue des chapitres est invalide.')
+    if (!Array.isArray(sourcePaths) || sourcePaths.length === 0
+      || sourcePaths.some((sourcePath) => typeof sourcePath !== 'string' || !path.isAbsolute(sourcePath))) {
+      throw new Error('Les chemins des fichiers déposés sont invalides.')
+    }
+    return addChapterPaths(collectionId, language, sourcePaths)
   })
   ipcMain.handle('library:update-book', async (_event, input: unknown) => {
     if (!validBook(input)) throw new Error('Les informations de ce chapitre sont invalides.')

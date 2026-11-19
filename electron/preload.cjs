@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('yomu', {
   openGitHub: () => ipcRenderer.invoke('app:open-github'),
@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('yomu', {
   setLanguageVisibility: (visibility) => ipcRenderer.invoke('preferences:set-language-visibility', visibility),
   getUiLanguage: () => ipcRenderer.invoke('preferences:get-ui-language'),
   setUiLanguage: (language) => ipcRenderer.invoke('preferences:set-ui-language', language),
+  getReaderShortcuts: () => ipcRenderer.invoke('preferences:get-reader-shortcuts'),
+  setReaderShortcuts: (shortcuts) => ipcRenderer.invoke('preferences:set-reader-shortcuts', shortcuts),
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state)
     ipcRenderer.on('updates:state', listener)
@@ -20,6 +22,8 @@ contextBridge.exposeInMainWorld('yomu', {
   chooseLibraryRoot: () => ipcRenderer.invoke('library:choose-root'),
   retryLibraryRoot: () => ipcRenderer.invoke('library:retry-root'),
   openLibraryRoot: () => ipcRenderer.invoke('library:open-root'),
+  backupLibrary: () => ipcRenderer.invoke('library:backup'),
+  restoreLibraryBackup: () => ipcRenderer.invoke('library:restore-backup'),
   exportCollection: (collectionId) => ipcRenderer.invoke('library:export-collection', collectionId),
   importCollection: () => ipcRenderer.invoke('library:import-collection'),
   loadLibrary: () => ipcRenderer.invoke('library:load'),
@@ -29,6 +33,9 @@ contextBridge.exposeInMainWorld('yomu', {
     ipcRenderer.invoke('library:save-collection', collection, coverBytes, coverName, removeCover),
   deleteCollection: (id) => ipcRenderer.invoke('library:delete-collection', id),
   addChapters: (collectionId, language) => ipcRenderer.invoke('library:add-chapters', collectionId, language),
+  addChapterFolder: (collectionId, language) => ipcRenderer.invoke('library:add-chapter-folder', collectionId, language),
+  addDroppedChapters: (collectionId, language, files) =>
+    ipcRenderer.invoke('library:add-dropped-chapters', collectionId, language, Array.from(files, (file) => webUtils.getPathForFile(file))),
   updateBook: (book) => {
     const metadata = { ...book }
     delete metadata.file

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { DragEvent, FormEvent } from 'react'
 import {
   ArrowDownWideNarrow,
   ArrowLeft,
@@ -41,8 +41,11 @@ import type {
 } from './library'
 import type { LanguageVisibility } from '../electron/language-settings'
 import type { UiLanguage } from '../electron/ui-language'
+import { DEFAULT_READER_SHORTCUTS, isBindableReaderShortcut } from '../electron/reader-shortcuts'
+import type { ReaderShortcutAction, ReaderShortcuts } from '../electron/reader-shortcuts'
 import { UiLanguageProvider } from './ui-language'
 import { useUiLanguage } from './use-ui-language'
+import { countChapterPages } from './chapter-page-count'
 import './App.css'
 
 const Reader = lazy(() => import('./Reader'))
@@ -50,6 +53,34 @@ const Reader = lazy(() => import('./Reader'))
 type LibraryView = 'all' | CollectionStatus
 type CollectionSortOrder = 'recent' | 'title' | 'chapters' | 'progress'
 type ChapterSortOrder = 'recent' | 'title'
+type ChapterImportSource = { type: 'files' } | { type: 'folder' } | { type: 'drop'; files: File[] }
+type ChapterPageCount = { count: number } | { error: string }
+
+function chapterPageCountKey(book: LibraryBook, libraryRoot: string | null): string {
+  return `${libraryRoot ?? ''}\u0000${book.id}\u0000${book.relativePath}\u0000${book.size}\u0000${book.format}`
+}
+
+const readerShortcutLabels: Record<ReaderShortcutAction, string> = {
+  mangaPreviousPage: 'Page précédente (manga)',
+  mangaNextPage: 'Page suivante (manga)',
+  manhwaPreviousPage: 'Page précédente (manhwa)',
+  manhwaNextPage: 'Page suivante (manhwa)',
+  closeReader: 'Retour à la bibliothèque',
+}
+
+function displayReaderShortcut(key: string, language: UiLanguage): string {
+  const labels: Record<string, string> = {
+    ArrowLeft: '←',
+    ArrowRight: '→',
+    ArrowUp: '↑',
+    ArrowDown: '↓',
+    Escape: language === 'fr' ? 'Échap' : 'Escape',
+    PageUp: language === 'fr' ? 'Page précédente' : 'Page Up',
+    PageDown: language === 'fr' ? 'Page suivante' : 'Page Down',
+    Backspace: language === 'fr' ? 'Retour arrière' : 'Backspace',
+  }
+  return labels[key] ?? (key.length === 1 ? key.toLocaleUpperCase(language) : key)
+}
 
 const viewLabels: Record<LibraryView, string> = {
   all: 'Toutes les collections',
@@ -444,6 +475,9 @@ function AppContent() {
   const [languageVisibility, setLanguageVisibility] = useState<LanguageVisibility>('both')
   const [isSavingLanguageVisibility, setIsSavingLanguageVisibility] = useState(false)
   const [isSavingUiLanguage, setIsSavingUiLanguage] = useState(false)
+  const [readerShortcuts, setReaderShortcuts] = useState<ReaderShortcuts>(DEFAULT_READER_SHORTCUTS)
+  const [isSavingReaderShortcuts, setIsSavingReaderShortcuts] = useState(false)
+  const [capturingShortcut, setCapturingShortcut] = useState<ReaderShortcutAction | null>(null)
   const [query, setQuery] = useState('')
   const [readerBook, setReaderBook] = useState<{ book: LibraryBook; kind: CollectionKind } | null>(null)
   const [editingBook, setEditingBook] = useState<LibraryBook | null>(null)
@@ -451,16 +485,23 @@ function AppContent() {
   const [deletingCollection, setDeletingCollection] = useState<LibraryCollection | null>(null)
   const [showCollectionDialog, setShowCollectionDialog] = useState(false)
   const [showImportLanguage, setShowImportLanguage] = useState(false)
+  const [chapterImportSource, setChapterImportSource] = useState<ChapterImportSource>({ type: 'files' })
+  const [isDragActive, setIsDragActive] = useState(false)
   const [languageSelections, setLanguageSelections] = useState<Record<string, ChapterLanguage | 'unassigned'>>({})
   const [isImporting, setIsImporting] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [isExportingCollection, setIsExportingCollection] = useState(false)
   const [isImportingCollection, setIsImportingCollection] = useState(false)
+  const [isBackingUpLibrary, setIsBackingUpLibrary] = useState(false)
+  const [isRestoringLibrary, setIsRestoringLibrary] = useState(false)
   const [updateState, setUpdateState] = useState<UpdateState | null>(null)
   const [updateActionPending, setUpdateActionPending] = useState(false)
+  const [chapterPageCounts, setChapterPageCounts] = useState<Record<string, ChapterPageCount>>({})
   const booksRef = useRef<LibraryBook[]>([])
+  const chapterPageCountCacheRef = useRef(new Map<string, Promise<ChapterPageCount>>())
   const openRequestRef = useRef(0)
+  const dragDepthRef = useRef(0)
   const activeCollection = collections.find((collection) => collection.id === activeCollectionId)
   const visibleError = error || (uiLanguageLoadError ? t(uiLanguageLoadError) : '')
 
@@ -515,6 +556,40 @@ function AppContent() {
     }
   }
 
+  const saveReaderShortcut = async (action: ReaderShortcutAction, key: string) => {
+    if (!window.yomu) return
+    const updated = { ...readerShortcuts, [action]: key }
+    if (new Set(Object.values(updated)).size !== Object.keys(updated).length) {
+      setError(t('Chaque raccourci doit utiliser une touche différente.'))
+      return
+    }
+    setIsSavingReaderShortcuts(true)
+    setError('')
+    try {
+      await window.yomu.setReaderShortcuts(updated)
+      setReaderShortcuts(updated)
+    } catch (reason) {
+      setError(t(reason instanceof Error ? reason.message : 'Les raccourcis clavier n’ont pas pu être enregistrés.'))
+    } finally {
+      setIsSavingReaderShortcuts(false)
+    }
+  }
+
+  const resetReaderShortcuts = async () => {
+    setCapturingShortcut(null)
+    if (!window.yomu) return
+    setIsSavingReaderShortcuts(true)
+    setError('')
+    try {
+      await window.yomu.setReaderShortcuts(DEFAULT_READER_SHORTCUTS)
+      setReaderShortcuts(DEFAULT_READER_SHORTCUTS)
+    } catch (reason) {
+      setError(t(reason instanceof Error ? reason.message : 'Les raccourcis clavier n’ont pas pu être enregistrés.'))
+    } finally {
+      setIsSavingReaderShortcuts(false)
+    }
+  }
+
   const refreshLibrary = useCallback(async () => {
     if (!window.yomu) throw new Error(t('L’application Windows Yomu est nécessaire pour accéder à ton dossier.'))
     const stored = await window.yomu.loadLibrary()
@@ -540,10 +615,15 @@ function AppContent() {
         if (active) setError(t(reason instanceof Error ? reason.message : 'Les catégories de langue n’ont pas pu être chargées.'))
         return 'both' as const
       }),
+      api.getReaderShortcuts().catch((reason: unknown) => {
+        if (active) setError(t(reason instanceof Error ? reason.message : 'Les raccourcis clavier n’ont pas pu être chargés.'))
+        return DEFAULT_READER_SHORTCUTS
+      }),
     ])
-      .then(async ([root, visibility]) => {
+      .then(async ([root, visibility, shortcuts]) => {
         if (!active) return
         setLanguageVisibility(visibility)
+        setReaderShortcuts(shortcuts)
         setLibraryRoot(root)
         if (root) {
           const stored = await api.loadLibrary()
@@ -638,6 +718,55 @@ function AppContent() {
             : hasUnassignedBooks ? 'unassigned' : languageVisibility
   const collectionBooks = allCollectionBooks.filter((book) => selectedLanguage === 'unassigned' ? book.language === null : book.language === selectedLanguage)
 
+  useEffect(() => {
+    const api = window.yomu
+    if (activeCollection?.kind !== 'Manga' || !api) return
+    let active = true
+    const loadPageCounts = async () => {
+      for (const book of allCollectionBooks) {
+        const format = book.format
+        if (format === 'EPUB') continue
+        const key = chapterPageCountKey(book, libraryRoot)
+        let resultPromise = chapterPageCountCacheRef.current.get(key)
+        if (!resultPromise) {
+          resultPromise = (async () => {
+            try {
+              const bytes = await api.readAsset(book.relativePath)
+              return { count: await countChapterPages(format, bytes) }
+            } catch (reason) {
+              console.error(`Impossible de compter les pages du chapitre « ${book.chapter || book.title} ».`, reason)
+              return { error: reason instanceof Error ? reason.message : String(reason) }
+            }
+          })()
+          chapterPageCountCacheRef.current.set(key, resultPromise)
+        }
+        const result = await resultPromise
+        if (!active) return
+        setChapterPageCounts((current) => current[key] ? current : { ...current, [key]: result })
+      }
+    }
+    void loadPageCounts()
+    return () => { active = false }
+  }, [activeCollection?.id, activeCollection?.kind, allCollectionBooks, libraryRoot])
+
+  const countableChapters = activeCollection?.kind === 'Manga'
+    ? allCollectionBooks.filter((book) => book.format !== 'EPUB')
+    : []
+  const pendingPageCounts = countableChapters.some((book) => !chapterPageCounts[chapterPageCountKey(book, libraryRoot)])
+  const unavailablePageCount = countableChapters.filter((book) => {
+    const pageCount = chapterPageCounts[chapterPageCountKey(book, libraryRoot)]
+    return pageCount !== undefined && 'error' in pageCount
+  }).length
+  const totalCountedPages = countableChapters.reduce((total, book) => {
+    const pageCount = chapterPageCounts[chapterPageCountKey(book, libraryRoot)]
+    return pageCount && 'count' in pageCount ? total + pageCount.count : total
+  }, 0)
+  const pageCountSummary = countableChapters.length === 0
+    ? ''
+    : pendingPageCounts
+      ? t('Calcul du total des pages…')
+      : `${t(totalCountedPages === 1 ? 'Total : {count} page' : 'Total : {count} pages', { count: totalCountedPages })}${unavailablePageCount ? ` · ${unavailablePageCount} ${t(unavailablePageCount === 1 ? 'chapitre non compté' : 'chapitres non comptés')}` : ''}`
+
   const readerChapters = useMemo(
     () => readerBook
       ? books.filter((book) => book.collectionId === readerBook.book.collectionId && book.language === readerBook.book.language)
@@ -657,23 +786,73 @@ function AppContent() {
   )
   const continueCollection = collections.find((collection) => collection.id === continueBook?.collectionId)
 
-  const importFiles = async (language: ChapterLanguage) => {
+  const importFiles = async (language: ChapterLanguage, source: ChapterImportSource) => {
     if (!activeCollection || !window.yomu) {
       setError(t('Ouvre une collection dans l’application Windows avant d’y ajouter des chapitres.'))
       return
     }
     setError('')
+    setNotice('')
     setIsImporting(true)
     try {
-      const imported = await window.yomu.addChapters(activeCollection.id, language)
-      if (imported.length > 0) {
+      const imported = source.type === 'folder'
+        ? await window.yomu.addChapterFolder(activeCollection.id, language)
+        : source.type === 'drop'
+          ? await window.yomu.addDroppedChapters(activeCollection.id, language, source.files)
+          : await window.yomu.addChapters(activeCollection.id, language)
+      if (imported.books.length > 0) {
         await refreshLibrary()
         setLanguageSelections((current) => ({ ...current, [activeCollection.id]: language }))
+      }
+      if (imported.books.length > 0 || imported.duplicatesSkipped > 0) {
+        const addedSummary = imported.books.length === 0
+          ? t('aucun chapitre ajouté')
+          : t(imported.books.length === 1 ? '{count} chapitre ajouté' : '{count} chapitres ajoutés', { count: imported.books.length })
+        const duplicatesSummary = imported.duplicatesSkipped === 0
+          ? t('aucun doublon détecté')
+          : t(imported.duplicatesSkipped === 1 ? '{count} doublon ignoré' : '{count} doublons ignorés', { count: imported.duplicatesSkipped })
+        setNotice(t('Import terminé : {added}, {duplicates}.', { added: addedSummary, duplicates: duplicatesSummary }))
       }
     } catch (reason) {
       setError(t(reason instanceof Error ? reason.message : 'L’import des chapitres a échoué.'))
     } finally {
       setIsImporting(false)
+    }
+  }
+
+  const chooseChapterImportSource = (source: ChapterImportSource) => {
+    setChapterImportSource(source)
+    setShowImportLanguage(true)
+  }
+
+  const handleCollectionDragEnter = (event: DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer.types.includes('Files') || isImporting) return
+    event.preventDefault()
+    dragDepthRef.current++
+    setIsDragActive(true)
+  }
+
+  const handleCollectionDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setIsDragActive(false)
+  }
+
+  const handleCollectionDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer.types.includes('Files') || isImporting) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleCollectionDrop = (event: DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    dragDepthRef.current = 0
+    setIsDragActive(false)
+    const files = Array.from(event.dataTransfer.files)
+    if (files.length > 0 && !isImporting && !showImportLanguage) {
+      chooseChapterImportSource({ type: 'drop', files })
     }
   }
 
@@ -744,6 +923,45 @@ function AppContent() {
       setError(t(reason instanceof Error ? reason.message : 'La collection n’a pas pu être exportée.'))
     } finally {
       setIsExportingCollection(false)
+    }
+  }
+
+  const backupLibrary = async () => {
+    if (!window.yomu) return
+    setError('')
+    setNotice('')
+    setIsBackingUpLibrary(true)
+    try {
+      const archivePath = await window.yomu.backupLibrary()
+      if (archivePath) setNotice(t('Sauvegarde créée : {path}', { path: archivePath }))
+    } catch (reason) {
+      setError(t(reason instanceof Error ? reason.message : 'La bibliothèque n’a pas pu être sauvegardée.'))
+    } finally {
+      setIsBackingUpLibrary(false)
+    }
+  }
+
+  const restoreLibraryBackup = async () => {
+    if (!window.yomu) return
+    setError('')
+    setNotice('')
+    setIsRestoringLibrary(true)
+    try {
+      const restoredRoot = await window.yomu.restoreLibraryBackup()
+      if (!restoredRoot) return
+      setIsStarting(true)
+      setLibraryRoot(restoredRoot)
+      setActiveCollectionId('')
+      setBooks([])
+      setCollections([])
+      await refreshLibrary()
+      setActiveView('all')
+      setNotice(t('Sauvegarde restaurée dans : {path}', { path: restoredRoot }))
+    } catch (reason) {
+      setError(t(reason instanceof Error ? reason.message : 'La bibliothèque n’a pas pu être restaurée.'))
+    } finally {
+      setIsStarting(false)
+      setIsRestoringLibrary(false)
     }
   }
 
@@ -826,9 +1044,8 @@ function AppContent() {
     })
   }, [t])
 
-  const chooseLibraryFolder = async (isChanging = false) => {
+  const chooseLibraryFolder = async () => {
     if (!window.yomu) return
-    if (isChanging && !window.confirm(t('Changer de dossier ne déplace pas les collections existantes. Elles resteront dans leur dossier actuel. Continuer ?'))) return
     try {
       const selected = await window.yomu.chooseLibraryRoot()
       if (!selected) return
@@ -902,7 +1119,7 @@ function AppContent() {
   }
 
   if (readerBook) {
-    return <Suspense fallback={<div className="reader-loading full-screen"><span>{t('Ouverture du lecteur…')}</span></div>}><Reader book={readerBook.book} collectionKind={readerBook.kind} previousChapter={previousReaderChapter} nextChapter={nextReaderChapter} onNavigateChapter={(book) => void openBook(book)} onClose={() => { openRequestRef.current++; setReaderBook(null) }} onProgress={updateProgress} error={visibleError} /></Suspense>
+    return <Suspense fallback={<div className="reader-loading full-screen"><span>{t('Ouverture du lecteur…')}</span></div>}><Reader book={readerBook.book} collectionKind={readerBook.kind} previousChapter={previousReaderChapter} nextChapter={nextReaderChapter} onNavigateChapter={(book) => void openBook(book)} onClose={() => { openRequestRef.current++; setReaderBook(null) }} onProgress={updateProgress} error={visibleError} shortcuts={readerShortcuts} /></Suspense>
   }
 
   const openCreateCollection = () => {
@@ -934,7 +1151,7 @@ function AppContent() {
           <div className="folder-setup-mark"><BookOpen size={24} /></div>
           <span className="eyebrow">{t('BIBLIOTHÈQUE INDISPONIBLE')}</span>
           <h1>{t('Ta bibliothèque est introuvable.')}</h1>
-          <p>{t('Reconnecte le disque ou le support qui contient ta bibliothèque, puis réessaie. Tu peux aussi choisir un autre dossier ; tes anciennes données ne seront ni déplacées ni supprimées.')}</p>
+          <p>{t('Reconnecte le disque ou le support qui contient ta bibliothèque, puis réessaie. Tu peux aussi choisir un autre dossier et déplacer ou copier ta bibliothèque.')}</p>
           {visibleError && <p className="dialog-error" role="alert">{visibleError}</p>}
           <div className="folder-setup-actions">
             <button className="button-primary" onClick={() => void retryLibraryFolder()}><RotateCw size={16} /> {t('Réessayer la connexion')}</button>
@@ -1103,6 +1320,40 @@ function AppContent() {
                   </select>
                 </label>
               </div>
+              <div className="settings-card settings-reader-shortcuts">
+                <div className="settings-card-copy">
+                  <strong>{t('Raccourcis clavier')}</strong>
+                  <span>{t('Clique sur une touche puis appuie sur une touche du clavier pour modifier le raccourci. Les touches doivent être distinctes.')}</span>
+                </div>
+                <div className="settings-shortcut-list" role="group" aria-label={t('Raccourcis clavier')}>
+                  {(Object.keys(readerShortcutLabels) as ReaderShortcutAction[]).map((action) => (
+                    <div className="settings-shortcut-row" key={action}>
+                      <span>{t(readerShortcutLabels[action])}</span>
+                      <button
+                        type="button"
+                        className={`settings-shortcut-key${capturingShortcut === action ? ' capturing' : ''}`}
+                        aria-label={t(capturingShortcut === action ? 'Appuie sur une touche pour {action}' : 'Modifier le raccourci : {action}', { action: t(readerShortcutLabels[action]) })}
+                        disabled={isSavingReaderShortcuts}
+                        onClick={() => setCapturingShortcut(capturingShortcut === action ? null : action)}
+                        onKeyDown={(event) => {
+                          if (capturingShortcut !== action || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+                          if (!isBindableReaderShortcut(event.key)) return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setCapturingShortcut(null)
+                          void saveReaderShortcut(action, event.key)
+                        }}
+                      >
+                        {capturingShortcut === action
+                          ? t('Appuie sur une touche…')
+                          : displayReaderShortcut(readerShortcuts[action], language)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" className="button-secondary settings-shortcut-reset" disabled={isSavingReaderShortcuts}
+                  onClick={() => void resetReaderShortcuts()}>{t('Rétablir les raccourcis par défaut')}</button>
+              </div>
               <div className="settings-card settings-language-preferences">
                 <div className="settings-card-copy">
                   <strong>{t('Catégories de langue')}</strong>
@@ -1128,26 +1379,47 @@ function AppContent() {
                   <span>{t('Emplacement actuel de tes collections et chapitres')}</span>
                   <code title={libraryRoot}>{libraryRoot}</code>
                 </div>
-                <button className="button-secondary" onClick={() => void chooseLibraryFolder(true)}>
+                <button className="button-secondary" onClick={() => void chooseLibraryFolder()}>
                   <Pencil size={15} /> {t('Changer de dossier')}
                 </button>
                 <button className="button-secondary settings-open-folder" onClick={() => void openLibraryFolder()}>
                   <FolderOpen size={15} /> {t('Ouvrir dans l’Explorateur')}
                 </button>
-                <p className="settings-note">{t('Changer de dossier ne déplace pas les collections déjà enregistrées.')}</p>
+                <p className="settings-note">{t('Lors d’un changement, tu peux déplacer ou copier la bibliothèque, ou changer le chemin sans transfert.')}</p>
+              </div>
+              <div className="settings-card">
+                <div className="settings-card-copy">
+                  <strong>{t('Sauvegarde complète')}</strong>
+                  <span>{t('Sauvegarde toutes les collections, leurs fichiers et les positions de lecture dans une archive ZIP.')}</span>
+                  <span>{t('La restauration utilise un nouveau dossier vide et conserve la bibliothèque actuelle.')}</span>
+                </div>
+                <button className="button-secondary" onClick={() => void backupLibrary()} disabled={isBackingUpLibrary || isRestoringLibrary}>
+                  <Archive size={15} /> {t(isBackingUpLibrary ? 'Sauvegarde en cours…' : 'Sauvegarder la bibliothèque')}
+                </button>
+                <button className="button-secondary" onClick={() => void restoreLibraryBackup()} disabled={isBackingUpLibrary || isRestoringLibrary}>
+                  <ArchiveRestore size={15} /> {t(isRestoringLibrary ? 'Restauration en cours…' : 'Restaurer une sauvegarde')}
+                </button>
               </div>
             </section>
           ) : activeCollection ? (
-            <section className="collection-detail">
+            <section
+              className={`collection-detail${isDragActive ? ' collection-drop-active' : ''}`}
+              onDragEnter={handleCollectionDragEnter}
+              onDragLeave={handleCollectionDragLeave}
+              onDragOver={handleCollectionDragOver}
+              onDrop={handleCollectionDrop}
+            >
+              {isDragActive && <div className="collection-drop-overlay" role="status">{t('Dépose des fichiers PDF, CBZ ou EPUB ici pour les ajouter à cette collection.')}</div>}
               <button className="back-to-collections" onClick={() => setActiveCollectionId('')}><ArrowLeft size={15} /> {t('Toutes les collections')}</button>
               <div className="collection-detail-header">
                 <CollectionCover collection={activeCollection} className="detail-cover" />
                 <div className="collection-detail-info">
                   <div className="collection-badges"><span>{activeCollection.kind}</span><span className={`status-pill status-${activeCollection.status}`}>{t(statusLabels[activeCollection.status])}</span></div>
                   <h1>{activeCollection.title}</h1>
-                  <p>{allCollectionBooks.length} {t(allCollectionBooks.length === 1 ? 'chapitre' : 'chapitres')} · {formatSize(collectionSizes.get(activeCollection.id) ?? 0, language)}</p>
+                  <p>{allCollectionBooks.length} {t(allCollectionBooks.length === 1 ? 'chapitre' : 'chapitres')} · {formatSize(collectionSizes.get(activeCollection.id) ?? 0, language)}{pageCountSummary && <> · {pageCountSummary}</>}</p>
                   <div className="detail-actions">
-                    <button className="button-primary" onClick={() => setShowImportLanguage(true)} disabled={isImporting}><Plus size={16} />{t(isImporting ? 'Import en cours…' : 'Ajouter des chapitres')}</button>
+                    <button className="button-primary" onClick={() => chooseChapterImportSource({ type: 'files' })} disabled={isImporting}><Plus size={16} />{t(isImporting ? 'Import en cours…' : 'Ajouter des chapitres')}</button>
+                    <button className="button-secondary" onClick={() => chooseChapterImportSource({ type: 'folder' })} disabled={isImporting}><FolderOpen size={15} />{t('Importer un dossier')}</button>
                     <button className="button-secondary" onClick={() => void exportCollection(activeCollection)} disabled={isExportingCollection}><Archive size={15} />{t(isExportingCollection ? 'Exportation…' : 'Exporter')}</button>
                     <button className="button-secondary" onClick={() => setEditingCollection(activeCollection)}><Pencil size={15} /> {t('Modifier')}</button>
                     <button className="icon-button delete-action" aria-label={t('Supprimer {title}', { title: activeCollection.title })} onClick={() => setDeletingCollection(activeCollection)}><Trash2 size={16} /></button>
@@ -1179,23 +1451,43 @@ function AppContent() {
                     <div className="empty-chapters-icon"><FileText size={24} /></div>
                     <h2>{t('Pas encore de chapitres dans cette langue')}</h2>
                     <p>{t('Ajoute tes fichiers PDF, CBZ ou EPUB à cette collection.')}</p>
-                    <button className="button-primary" onClick={() => setShowImportLanguage(true)} disabled={isImporting}><Plus size={16} /> {t('Ajouter des chapitres')}</button>
+                    <div className="detail-actions">
+                      <button className="button-primary" onClick={() => chooseChapterImportSource({ type: 'files' })} disabled={isImporting}><Plus size={16} /> {t('Ajouter des chapitres')}</button>
+                      <button className="button-secondary" onClick={() => chooseChapterImportSource({ type: 'folder' })} disabled={isImporting}><FolderOpen size={15} /> {t('Importer un dossier')}</button>
+                    </div>
                   </div>
                 ) : (
                   <div className="chapter-list">
-                    {collectionBooks.map((book, index) => (
-                      <article className="chapter-row" key={book.id}>
-                        <button className="chapter-number" onClick={() => void openBook(book)} aria-label={t('Lire {title}', { title: book.chapter || book.title })}>{chapterOrderLabel(book, index)}</button>
-                        <button className="chapter-title" onClick={() => void openBook(book)}><strong>{book.chapter || book.title}</strong><span>{book.format} · {formatSize(book.size, language)}</span></button>
-                        <div className="chapter-progress"><span className={book.progress > 0 ? 'chapter-progress-fill' : ''} style={{ width: `${book.progress}%` }} /></div>
-                        <span className="chapter-progress-label">{book.progress ? `${book.progress}%` : t('À lire')}</span>
-                        <div className="chapter-actions">
-                          <button className="icon-button" aria-label={t('Modifier {title}', { title: book.chapter || book.title })} onClick={() => setEditingBook(book)}><Pencil size={14} /></button>
-                          <button className="icon-button delete-action" aria-label={t('Supprimer {title}', { title: book.chapter || book.title })} onClick={() => void removeChapter(book)}><Trash2 size={14} /></button>
-                        </div>
-                      </article>
-                    ))}
-                    <button className="add-chapter-row" onClick={() => setShowImportLanguage(true)} disabled={isImporting}><Plus size={16} /> {t('Ajouter des chapitres à cette collection')}</button>
+                    {collectionBooks.map((book, index) => {
+                      const pageCount = book.format === 'EPUB'
+                        ? undefined
+                        : chapterPageCounts[chapterPageCountKey(book, libraryRoot)]
+                      return (
+                        <article className="chapter-row" key={book.id}>
+                          <button className="chapter-number" onClick={() => void openBook(book)} aria-label={t('Lire {title}', { title: book.chapter || book.title })}>{chapterOrderLabel(book, index)}</button>
+                          <button className="chapter-title" onClick={() => void openBook(book)}>
+                            <strong>{book.chapter || book.title}</strong>
+                            <span>
+                              {book.format} · {formatSize(book.size, language)}
+                              {activeCollection.kind === 'Manga' && book.format !== 'EPUB' && (
+                                <> · {pageCount
+                                  ? 'count' in pageCount
+                                    ? `${pageCount.count} ${t(pageCount.count === 1 ? 'page' : 'pages')}`
+                                    : <span className="chapter-page-count-error" title={pageCount.error}>{t('Nombre de pages indisponible')}</span>
+                                  : t('Calcul…')}</>
+                              )}
+                            </span>
+                          </button>
+                          <div className="chapter-progress"><span className={book.progress > 0 ? 'chapter-progress-fill' : ''} style={{ width: `${book.progress}%` }} /></div>
+                          <span className="chapter-progress-label">{book.progress ? `${book.progress}%` : t('À lire')}</span>
+                          <div className="chapter-actions">
+                            <button className="icon-button" aria-label={t('Modifier {title}', { title: book.chapter || book.title })} onClick={() => setEditingBook(book)}><Pencil size={14} /></button>
+                            <button className="icon-button delete-action" aria-label={t('Supprimer {title}', { title: book.chapter || book.title })} onClick={() => void removeChapter(book)}><Trash2 size={14} /></button>
+                          </div>
+                        </article>
+                      )
+                    })}
+                    <button className="add-chapter-row" onClick={() => chooseChapterImportSource({ type: 'files' })} disabled={isImporting}><Plus size={16} /> {t('Ajouter des chapitres à cette collection')}</button>
                   </div>
                 )}
               </div>
@@ -1275,7 +1567,7 @@ function AppContent() {
       {showCollectionDialog && <CollectionDialog collection={null} onClose={() => setShowCollectionDialog(false)} onSave={(collection, cover, coverName, removeCover) => void saveCollectionDetails(collection, cover, coverName, removeCover)} />}
       {editingCollection && <CollectionDialog collection={editingCollection} onClose={() => setEditingCollection(null)} onSave={(collection, cover, coverName, removeCover) => void saveCollectionDetails(collection, cover, coverName, removeCover)} />}
       {editingBook && <EditChapterDialog book={editingBook} onClose={() => setEditingBook(null)} onSave={(book) => void saveChapterDetails(book)} />}
-      {showImportLanguage && <ImportLanguageDialog onClose={() => setShowImportLanguage(false)} onChoose={(language) => { setShowImportLanguage(false); void importFiles(language) }} />}
+      {showImportLanguage && <ImportLanguageDialog onClose={() => setShowImportLanguage(false)} onChoose={(language) => { setShowImportLanguage(false); void importFiles(language, chapterImportSource) }} />}
       {deletingCollection && <DeleteCollectionDialog collection={deletingCollection} chapterCount={chapterCounts.get(deletingCollection.id) ?? 0} onClose={() => setDeletingCollection(null)} onConfirm={() => removeCollection(deletingCollection)} />}
     </div>
   )

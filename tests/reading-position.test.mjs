@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { validReadingPosition } from '../dist-electron/reading-position.js'
-import { initialPage, initialPagePosition, pageAtViewportCenter, pagePositionAtViewportCenter, pageFromProgress } from '../src/reading-position.ts'
+import { initialPage, initialPagePosition, mangaPageSpread, nextMangaSpreadPage, pageAtViewportCenter, pagePositionAtViewportCenter, pageFromProgress } from '../src/reading-position.ts'
 
 test('la reprise privilégie la page enregistrée et borne les anciennes progressions', () => {
   assert.equal(initialPage({ page: 8 }, 20, 10), 8)
@@ -12,6 +12,21 @@ test('la reprise privilégie la page enregistrée et borne les anciennes progres
   assert.equal(pageFromProgress(0, 10), 1)
   assert.equal(pageFromProgress(100, 10), 10)
   assert.equal(pageFromProgress(67, 3), 2)
+})
+
+test('les doubles pages manga laissent la couverture seule et avancent par paires', () => {
+  assert.deepEqual(mangaPageSpread(1, 5, true), { startPage: 1, endPage: 1 })
+  assert.deepEqual(mangaPageSpread(2, 5, true), { startPage: 2, endPage: 3 })
+  assert.deepEqual(mangaPageSpread(3, 5, true), { startPage: 2, endPage: 3 })
+  assert.deepEqual(mangaPageSpread(5, 5, true), { startPage: 4, endPage: 5 })
+  assert.deepEqual(mangaPageSpread(3, 4, true), { startPage: 2, endPage: 3 })
+  assert.deepEqual(mangaPageSpread(4, 4, true), { startPage: 4, endPage: 4 })
+  assert.deepEqual(mangaPageSpread(3, 5, false), { startPage: 3, endPage: 3 })
+  assert.equal(nextMangaSpreadPage(1, 5, 1), 2)
+  assert.equal(nextMangaSpreadPage(2, 5, 1), 4)
+  assert.equal(nextMangaSpreadPage(4, 5, 1), 4)
+  assert.equal(nextMangaSpreadPage(4, 5, -1), 2)
+  assert.equal(nextMangaSpreadPage(2, 5, -1), 1)
 })
 
 test('la page active suit le centre de la fenêtre même pour les pages très hautes', () => {

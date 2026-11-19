@@ -37,6 +37,11 @@ export interface LibraryBook {
 export type StoredBook = Omit<LibraryBook, 'file'>
 export type StoredCollection = Omit<LibraryCollection, 'cover'>
 
+export interface ChapterImportResult {
+  books: StoredBook[]
+  duplicatesSkipped: number
+}
+
 export interface CollectionImportResult extends StoredCollection {
   chaptersAdded: number
 }

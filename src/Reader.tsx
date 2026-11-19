@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import ePub from 'epubjs'
+import ePub, { EpubCFI } from 'epubjs'
 import type Rendition from 'epubjs/types/rendition'
 import type Section from 'epubjs/types/section'
 import JSZip from 'jszip'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import { ArrowLeft, ArrowRight, LoaderCircle, LockKeyhole, LockKeyholeOpen, Maximize, Minimize, RotateCcw, SkipBack, SkipForward, ZoomIn, ZoomOut } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BookOpen, LoaderCircle, LockKeyhole, LockKeyholeOpen, Maximize, Minimize, RotateCcw, SkipBack, SkipForward, ZoomIn, ZoomOut } from 'lucide-react'
 import type { CollectionKind, LibraryBook } from './library'
-import { initialPage, initialPagePosition, pagePositionAtViewportCenter } from './reading-position'
+import { initialPage, initialPagePosition, mangaPageSpread, nextMangaSpreadPage, pagePositionAtViewportCenter } from './reading-position'
 import type { ReadingPosition } from './reading-position'
+import type { ReaderShortcuts } from '../electron/reader-shortcuts'
 import { useUiLanguage } from './use-ui-language'
 
 interface ReaderProps {
@@ -21,9 +22,11 @@ interface ReaderProps {
   onClose: () => void
   onProgress: (bookId: string, progress: number, position: ReadingPosition) => void
   error: string
+  shortcuts: ReaderShortcuts
 }
 
-type ReaderContentProps = Pick<ReaderProps, 'book' | 'collectionKind'> & {
+type ReaderContentProps = Pick<ReaderProps, 'book' | 'collectionKind' | 'shortcuts'> & {
+  doublePage: boolean
   onClose: ReaderProps['onClose']
   onProgress: (progress: number, position: ReadingPosition) => void
 }
@@ -76,15 +79,24 @@ function PageNavigation({ onPrevious, onNext, previousDisabled, nextDisabled }: 
   )
 }
 
-function handlePageNavigationKeyDown(event: KeyboardEvent, collectionKind: CollectionKind, onPrevious: () => void, onNext: () => void) {
-  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+function isEditableTarget(event: KeyboardEvent): boolean {
   const eventTarget = event.target
-  if (eventTarget && typeof eventTarget === 'object' && 'tagName' in eventTarget) {
-    const target = eventTarget as HTMLElement
-    if (target.isContentEditable || target.closest('input, textarea, select')) return
-  }
-  const previousKey = collectionKind === 'Manga' ? 'ArrowLeft' : 'ArrowUp'
-  const nextKey = collectionKind === 'Manga' ? 'ArrowRight' : 'ArrowDown'
+  if (!eventTarget || typeof eventTarget !== 'object' || !('tagName' in eventTarget)) return false
+  const target = eventTarget as HTMLElement
+  return target.isContentEditable || Boolean(target.closest('input, textarea, select'))
+}
+
+function handlePageNavigationKeyDown(
+  event: KeyboardEvent,
+  collectionKind: CollectionKind,
+  shortcuts: ReaderShortcuts,
+  onPrevious: () => void,
+  onNext: () => void,
+) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (isEditableTarget(event)) return
+  const previousKey = collectionKind === 'Manga' ? shortcuts.mangaPreviousPage : shortcuts.manhwaPreviousPage
+  const nextKey = collectionKind === 'Manga' ? shortcuts.mangaNextPage : shortcuts.manhwaNextPage
   if (event.key === previousKey) {
     event.preventDefault()
     onPrevious()
@@ -94,18 +106,26 @@ function handlePageNavigationKeyDown(event: KeyboardEvent, collectionKind: Colle
   }
 }
 
-function usePageKeyboardNavigation(collectionKind: CollectionKind, onPrevious: () => void, onNext: () => void, enabled = true) {
+function usePageKeyboardNavigation(
+  collectionKind: CollectionKind,
+  shortcuts: ReaderShortcuts,
+  onPrevious: () => void,
+  onNext: () => void,
+  enabled = true,
+) {
   useEffect(() => {
     if (!enabled) return
-    const handleKeyDown = (event: KeyboardEvent) => handlePageNavigationKeyDown(event, collectionKind, onPrevious, onNext)
+    const handleKeyDown = (event: KeyboardEvent) => handlePageNavigationKeyDown(event, collectionKind, shortcuts, onPrevious, onNext)
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [collectionKind, enabled, onNext, onPrevious])
+  }, [collectionKind, enabled, onNext, onPrevious, shortcuts])
 }
 
-function useContinuousPdfScrollNavigation(scrollRef: RefObject<HTMLDivElement | null>, enabled: boolean) {
+function useContinuousPdfScrollNavigation(scrollRef: RefObject<HTMLDivElement | null>, enabled: boolean, shortcuts: ReaderShortcuts) {
   useEffect(() => {
     if (!enabled) return
+    const previousKey = shortcuts.manhwaPreviousPage
+    const nextKey = shortcuts.manhwaNextPage
     let activeDirection: -1 | 1 | null = null
     let animationFrame = 0
     let previousTime = 0
@@ -122,20 +142,16 @@ function useContinuousPdfScrollNavigation(scrollRef: RefObject<HTMLDivElement | 
       }
     }
     const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') stopScrolling()
+      if (event.key === previousKey || event.key === nextKey) stopScrolling()
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+      if (event.key !== previousKey && event.key !== nextKey) return
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-      const eventTarget = event.target
-      if (eventTarget && typeof eventTarget === 'object' && 'tagName' in eventTarget) {
-        const target = eventTarget as HTMLElement
-        if (target.isContentEditable || target.closest('input, textarea, select')) return
-      }
+      if (isEditableTarget(event)) return
       event.preventDefault()
       if (activeDirection !== null) return
-      activeDirection = event.key === 'ArrowUp' ? -1 : 1
+      activeDirection = event.key === previousKey ? -1 : 1
       keyDownTime = performance.now()
       previousTime = keyDownTime
       const scrollContinuously = (time: number) => {
@@ -157,19 +173,25 @@ function useContinuousPdfScrollNavigation(scrollRef: RefObject<HTMLDivElement | 
       window.removeEventListener('blur', stopScrolling)
       cancelAnimationFrame(animationFrame)
     }
-  }, [enabled, scrollRef])
+  }, [enabled, scrollRef, shortcuts])
 }
 
-function EpubReader({ book, onClose, onProgress, collectionKind }: ReaderContentProps) {
+function EpubReader({ book, onClose, onProgress, collectionKind, shortcuts, doublePage }: ReaderContentProps) {
   const { t } = useUiLanguage()
   const containerRef = useRef<HTMLDivElement>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const turnPageRef = useRef<(direction: 'previous' | 'next') => void>(() => {})
+  const doublePageRef = useRef(doublePage)
+  const originalDirectionRef = useRef('ltr')
+  const appliedDoublePageRef = useRef<boolean | null>(null)
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
   const [turning, setTurning] = useState(false)
   const [atStart, setAtStart] = useState(true)
   const [atEnd, setAtEnd] = useState(false)
+  useLayoutEffect(() => {
+    doublePageRef.current = doublePage
+  }, [doublePage])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -184,15 +206,18 @@ function EpubReader({ book, onClose, onProgress, collectionKind }: ReaderContent
       if (!active) return
       await epubBook.locations.generate(1024)
       if (!active) return
+      const metadata = await epubBook.loaded.metadata
+      originalDirectionRef.current = 'direction' in metadata && metadata.direction === 'rtl' ? 'rtl' : 'ltr'
       const rendition = epubBook.renderTo(container, {
         width: '100%',
         height: '100%',
-        spread: 'none',
+        spread: doublePageRef.current ? 'always' : 'none',
+        minSpreadWidth: 1,
         flow: 'paginated',
       })
       renditionRef.current = rendition
       rendition.on('keydown', (event: KeyboardEvent) => handlePageNavigationKeyDown(
-        event, collectionKind, () => turnPageRef.current('previous'), () => turnPageRef.current('next'),
+        event, collectionKind, shortcuts, () => turnPageRef.current('previous'), () => turnPageRef.current('next'),
       ))
       rendition.on('relocated', (location: { start?: { cfi?: string; percentage?: number; index?: number; displayed?: { page: number; total: number } }; atStart?: boolean; atEnd?: boolean }) => {
         if (!active) return
@@ -208,7 +233,27 @@ function EpubReader({ book, onClose, onProgress, collectionKind }: ReaderContent
           onProgress(location.atEnd ? 100 : Math.round(Math.max(0, Math.min(1, percentage)) * 100), { cfi: start.cfi })
         }
       })
-      const position = book.readingPosition && 'cfi' in book.readingPosition ? book.readingPosition.cfi : undefined
+      await rendition.started
+      if (!active) return
+      rendition.spread(doublePageRef.current ? 'always' : 'none', 1)
+      rendition.direction(doublePageRef.current ? 'ltr' : originalDirectionRef.current)
+      appliedDoublePageRef.current = doublePageRef.current
+      let position = book.readingPosition && 'cfi' in book.readingPosition ? book.readingPosition.cfi : undefined
+      if (position) {
+        try {
+          const section = epubBook.spine.get(position)
+          const range = section ? await epubBook.getRange(position) : null
+          if (!section || !range) {
+            position = undefined
+          } else {
+            range.collapse(true)
+            const resolvedPosition = section.cfiFromRange(range)
+            if (new EpubCFI(position).compare(position, resolvedPosition) !== 0) position = undefined
+          }
+        } catch {
+          position = undefined
+        }
+      }
       let fallbackPosition: string | undefined
       if (!position && book.progress > 0) {
         if (epubBook.locations.length() > 0) {
@@ -230,7 +275,15 @@ function EpubReader({ book, onClose, onProgress, collectionKind }: ReaderContent
       renditionRef.current = null
       epubBook.destroy()
     }
-  }, [book, collectionKind, onProgress, t])
+  }, [book, collectionKind, onProgress, shortcuts, t])
+
+  useEffect(() => {
+    const rendition = renditionRef.current
+    if (!ready || !rendition || appliedDoublePageRef.current === doublePage) return
+    rendition.spread(doublePage ? 'always' : 'none', 1)
+    rendition.direction(doublePage ? 'ltr' : originalDirectionRef.current)
+    appliedDoublePageRef.current = doublePage
+  }, [doublePage, ready])
 
   const turnPage = useCallback(async (direction: 'previous' | 'next') => {
     const rendition = renditionRef.current
@@ -250,6 +303,7 @@ function EpubReader({ book, onClose, onProgress, collectionKind }: ReaderContent
 
   usePageKeyboardNavigation(
     collectionKind,
+    shortcuts,
     () => void turnPage('previous'),
     () => void turnPage('next'),
   )
@@ -263,11 +317,11 @@ function EpubReader({ book, onClose, onProgress, collectionKind }: ReaderContent
   )
 }
 
-function CbzReader({ book, onClose, onProgress, collectionKind }: ReaderContentProps) {
+function CbzReader({ book, onClose, onProgress, collectionKind, shortcuts, doublePage }: ReaderContentProps) {
   const { t } = useUiLanguage()
   const [pages, setPages] = useState<JSZip.JSZipObject[]>([])
   const [page, setPage] = useState(0)
-  const [imageUrl, setImageUrl] = useState('')
+  const [loadedImages, setLoadedImages] = useState<{ startPage: number; endPage: number; urls: string[] } | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -291,19 +345,20 @@ function CbzReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
         if (active) setLoading(false)
       })
     return () => { active = false }
-  }, [book, t])
+  }, [book, collectionKind, shortcuts, t])
 
   useEffect(() => {
-    const currentPage = pages[page]
-    if (!currentPage) return
+    const pageRange = mangaPageSpread(page + 1, pages.length, collectionKind === 'Manga' && doublePage)
+    const visiblePages = pages.slice(pageRange.startPage - 1, pageRange.endPage)
+    if (!visiblePages.length) return
     let active = true
-    let url = ''
-    currentPage.async('blob')
-      .then((blob) => {
+    let urls: string[] = []
+    Promise.all(visiblePages.map((visiblePage) => visiblePage.async('blob')))
+      .then((blobs) => {
         if (active) {
-          url = URL.createObjectURL(blob)
-          setImageUrl(url)
-          onProgress(Math.round(((page + 1) / pages.length) * 100), { page: page + 1 })
+          urls = blobs.map((blob) => URL.createObjectURL(blob))
+          setLoadedImages({ startPage: pageRange.startPage, endPage: pageRange.endPage, urls })
+          onProgress(Math.round((pageRange.endPage / pages.length) * 100), { page: pageRange.startPage })
         }
       })
       .catch((reason: unknown) => {
@@ -311,15 +366,18 @@ function CbzReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
       })
     return () => {
       active = false
-      if (url) URL.revokeObjectURL(url)
+      urls.forEach((url) => URL.revokeObjectURL(url))
     }
-  }, [onProgress, page, pages, t])
+  }, [collectionKind, doublePage, onProgress, page, pages, t])
 
   const changePage = (direction: -1 | 1) => {
-    setPage((value) => Math.min(pages.length - 1, Math.max(0, value + direction)))
+    setPage((value) => collectionKind === 'Manga' && doublePage
+      ? nextMangaSpreadPage(value + 1, pages.length, direction) - 1
+      : Math.min(pages.length - 1, Math.max(0, value + direction)))
   }
   usePageKeyboardNavigation(
     collectionKind,
+    shortcuts,
     () => changePage(-1),
     () => changePage(1),
   )
@@ -327,18 +385,30 @@ function CbzReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
   if (loading) return <div className="reader-loading"><LoaderCircle className="spin" /> {t('Préparation des pages…')}</div>
   if (error) return <ReaderError format={book.format} message={error} onClose={onClose} />
 
+  const pageRange = mangaPageSpread(page + 1, pages.length, collectionKind === 'Manga' && doublePage)
+  const imageUrls = loadedImages?.startPage === pageRange.startPage && loadedImages.endPage === pageRange.endPage
+    ? loadedImages.urls
+    : []
   return (
-    <div className="cbz-reader">
-      {imageUrl && <img src={imageUrl} alt={t('Page {number}', { number: page + 1 })} />}
+    <div className={`cbz-reader${pageRange.endPage > pageRange.startPage ? ' cbz-reader-double-page' : ''}`}>
+      {imageUrls.map((imageUrl, index) => {
+        const pageNumber = pageRange.startPage + index
+        return <img key={pageNumber} src={imageUrl} alt={t('Page {number}', { number: pageNumber })} />
+      })}
       {collectionKind === 'Manga' ? (
-        <PageNavigation previousDisabled={page === 0} nextDisabled={page >= pages.length - 1} onPrevious={() => changePage(-1)} onNext={() => changePage(1)} />
+        <PageNavigation
+          previousDisabled={pageRange.startPage <= 1}
+          nextDisabled={pageRange.endPage >= pages.length}
+          onPrevious={() => changePage(-1)}
+          onNext={() => changePage(1)}
+        />
       ) : (
         <>
           <button className="page-nav page-prev" aria-label={t('Page précédente')} disabled={page === 0} onClick={() => changePage(-1)}><ArrowLeft /></button>
           <button className="page-nav page-next" aria-label={t('Page suivante')} disabled={page >= pages.length - 1} onClick={() => changePage(1)}><ArrowRight /></button>
         </>
       )}
-      <div className="page-count">{page + 1} / {pages.length}</div>
+      <div className="page-count">{pageRange.startPage}{pageRange.endPage > pageRange.startPage ? `–${pageRange.endPage}` : ''} / {pages.length}</div>
     </div>
   )
 }
@@ -430,7 +500,7 @@ function PdfPageCanvas({
   )
 }
 
-function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentProps) {
+function PdfReader({ book, onClose, onProgress, collectionKind, shortcuts, doublePage }: ReaderContentProps) {
   const { t } = useUiLanguage()
   const scrollRef = useRef<HTMLDivElement>(null)
   const restoredRef = useRef(false)
@@ -544,12 +614,18 @@ function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
     })
     observer.observe(container)
     return () => observer.disconnect()
-  }, [])
+  }, [shortcuts.closeReader])
 
   const activeSize = pageSizes[activePage - 1]
+  const activeSpread = mangaPageSpread(activePage, pageSizes.length, paged && doublePage)
+  const spreadPageSizes = pageSizes.slice(activeSpread.startPage - 1, activeSpread.endPage)
+  const spreadWidth = spreadPageSizes.reduce((width, size) => width + size.width, 0)
+  const spreadHeight = Math.max(0, ...spreadPageSizes.map((size) => size.height))
   const baseScale = pageSizes.length && containerWidth > 0
     ? paged && activeSize && containerHeight > 0
-      ? Math.min(1, Math.max(1, containerWidth - 80) / activeSize.width, Math.max(1, containerHeight - 28) / activeSize.height)
+      ? activeSpread.endPage > activeSpread.startPage
+        ? Math.min(1, Math.max(1, containerWidth - 80) / (spreadWidth + 4), Math.max(1, containerHeight - 28) / spreadHeight)
+        : Math.min(1, Math.max(1, containerWidth - 80) / activeSize.width, Math.max(1, containerHeight - 28) / activeSize.height)
       : Math.min(1, Math.max(1, containerWidth - 64) / Math.max(...pageSizes.map(({ width }) => width)))
     : 1
   const scale = baseScale * zoom
@@ -586,10 +662,15 @@ function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
     queueScrollProgress(Math.round(position.page / pageSizes.length * 100), position)
   }
   useEffect(() => {
-    if (paged && pageSizes.length > 0) onProgress(Math.round((activePage / pageSizes.length) * 100), { page: activePage })
-  }, [activePage, onProgress, pageSizes.length, paged])
+    if (paged && pageSizes.length > 0) {
+      const spread = mangaPageSpread(activePage, pageSizes.length, doublePage)
+      onProgress(Math.round((spread.endPage / pageSizes.length) * 100), { page: spread.startPage })
+    }
+  }, [activePage, doublePage, onProgress, pageSizes.length, paged])
   const changePage = (direction: -1 | 1) => {
-    setActivePage((page) => Math.min(pageSizes.length, Math.max(1, page + direction)))
+    setActivePage((page) => paged && doublePage
+      ? nextMangaSpreadPage(page, pageSizes.length, direction)
+      : Math.min(pageSizes.length, Math.max(1, page + direction)))
     scrollRef.current?.scrollTo({ top: 0, left: 0 })
   }
   const scrollManhwa = (direction: -1 | 1) => {
@@ -598,11 +679,12 @@ function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
   }
   usePageKeyboardNavigation(
     collectionKind,
+    shortcuts,
     () => paged ? changePage(-1) : scrollManhwa(-1),
     () => paged ? changePage(1) : scrollManhwa(1),
     paged,
   )
-  useContinuousPdfScrollNavigation(scrollRef, !paged)
+  useContinuousPdfScrollNavigation(scrollRef, !paged, shortcuts)
   const adjustZoom = (direction: 1 | -1) => {
     if (zoomLocked || zoomLoading || zoomSaving) return
     setZoom((value) => Math.min(MAX_PDF_ZOOM, Math.max(MIN_PDF_ZOOM, Math.round((value + direction * 0.1) * 100) / 100)))
@@ -625,6 +707,9 @@ function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
   }
 
   if (error) return <ReaderError format={book.format} message={error} onClose={onClose} />
+  const visiblePages = paged
+    ? spreadPageSizes.map((size, index) => ({ size, pageNumber: activeSpread.startPage + index }))
+    : pageSizes.map((size, index) => ({ size, pageNumber: index + 1 }))
   return (
     <div
       className="pdf-reader"
@@ -642,14 +727,14 @@ function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
         <button className={`pdf-zoom-button${zoomLocked ? ' pdf-zoom-locked' : ''}`} aria-label={t(zoomLocked ? 'Déverrouiller le zoom de cette collection' : 'Verrouiller le zoom pour cette collection')} title={t(zoomLocked ? 'Déverrouiller le zoom de cette collection' : 'Verrouiller le zoom pour cette collection')} aria-pressed={zoomLocked} disabled={zoomLoading || zoomSaving} onClick={() => void toggleZoomLock()}>{zoomLocked ? <LockKeyhole size={15} /> : <LockKeyholeOpen size={15} />}</button>
         <button className="pdf-zoom-button" aria-label={t('Zoom avant')} title={t('Zoom avant')} disabled={zoomLocked || zoomLoading || zoomSaving || zoom >= MAX_PDF_ZOOM} onClick={() => adjustZoom(1)}><ZoomIn size={16} /></button>
         <button className="pdf-zoom-button pdf-zoom-reset" aria-label={t(paged ? 'Ajuster à la page' : 'Ajuster à la largeur')} title={t(paged ? 'Ajuster à la page' : 'Ajuster à la largeur')} disabled={zoomLocked || zoomLoading || zoomSaving} onClick={() => setZoom(1)}><RotateCcw size={14} /><span>{t('Ajuster')}</span></button>
-        <span className="pdf-page-count">{activePage} / {pageSizes.length || '—'}</span>
+        <span className="pdf-page-count">{activeSpread.startPage}{activeSpread.endPage > activeSpread.startPage ? `–${activeSpread.endPage}` : ''} / {pageSizes.length || '—'}</span>
       </div>
-      <div className={`pdf-pages${paged ? ' pdf-pages-paged' : ''}`} ref={scrollRef} onScroll={updateVisiblePage}>
-        {document && !zoomLoading && pageSizes.map((size, index) => (!paged || index + 1 === activePage) && (
+      <div className={`pdf-pages${paged ? ' pdf-pages-paged' : ''}${activeSpread.endPage > activeSpread.startPage ? ' pdf-pages-double-page' : ''}`} ref={scrollRef} onScroll={updateVisiblePage}>
+        {document && !zoomLoading && visiblePages.map(({ size, pageNumber }) => (
           <PdfPageCanvas
-            key={index}
+            key={pageNumber}
             document={document}
-            pageNumber={index + 1}
+            pageNumber={pageNumber}
             size={size}
             scale={scale}
             scrollContainerRef={scrollRef}
@@ -657,15 +742,16 @@ function PdfReader({ book, onClose, onProgress, collectionKind }: ReaderContentP
           />
         ))}
       </div>
-      {paged && !loading && !zoomLoading && pageSizes.length > 0 && <PageNavigation previousDisabled={activePage <= 1} nextDisabled={activePage >= pageSizes.length} onPrevious={() => changePage(-1)} onNext={() => changePage(1)} />}
+      {paged && !loading && !zoomLoading && pageSizes.length > 0 && <PageNavigation previousDisabled={activeSpread.startPage <= 1} nextDisabled={activeSpread.endPage >= pageSizes.length} onPrevious={() => changePage(-1)} onNext={() => changePage(1)} />}
     </div>
   )
 }
 
-export default function Reader({ book, collectionKind, previousChapter, nextChapter, onNavigateChapter, onClose, onProgress, error }: ReaderProps) {
+export default function Reader({ book, collectionKind, previousChapter, nextChapter, onNavigateChapter, onClose, onProgress, error, shortcuts }: ReaderProps) {
   const readerRef = useRef<HTMLElement>(null)
   const closeCallback = useRef(onClose)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [doublePage, setDoublePage] = useState(false)
   const { t } = useUiLanguage()
   const [fullscreenError, setFullscreenError] = useState('')
 
@@ -676,7 +762,11 @@ export default function Reader({ book, collectionKind, previousChapter, nextChap
   useEffect(() => {
     const readerElement = readerRef.current
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !document.fullscreenElement) closeCallback.current()
+      if (event.key === shortcuts.closeReader && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+        && !isEditableTarget(event) && !document.fullscreenElement) {
+        event.preventDefault()
+        closeCallback.current()
+      }
     }
     const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === readerElement)
     window.addEventListener('keydown', handleKeyDown)
@@ -688,7 +778,7 @@ export default function Reader({ book, collectionKind, previousChapter, nextChap
         void document.exitFullscreen().catch((reason: unknown) => console.error('Impossible de quitter le plein écran.', reason))
       }
     }
-  }, [])
+  }, [shortcuts.closeReader])
 
   const reportProgress = useCallback((progress: number, position: ReadingPosition) => onProgress(book.id, progress, position), [book.id, onProgress])
   const toggleFullscreen = async () => {
@@ -715,6 +805,17 @@ export default function Reader({ book, collectionKind, previousChapter, nextChap
           <div className="reader-chapter-navigation">
             <ChapterNavigation previousChapter={previousChapter} nextChapter={nextChapter} onNavigateChapter={onNavigateChapter} />
           </div>
+          {collectionKind === 'Manga' && (
+            <button
+              className="reader-double-page-toggle"
+              aria-label={t(doublePage ? 'Désactiver la double page' : 'Activer la double page')}
+              aria-pressed={doublePage}
+              title={t(doublePage ? 'Désactiver la double page' : 'Activer la double page')}
+              onClick={() => setDoublePage((enabled) => !enabled)}
+            >
+              <BookOpen size={15} /><span>{t('Double page')}</span>
+            </button>
+          )}
           <span className="reader-format">{book.format}</span>
           <button className="reader-fullscreen-button" aria-label={t('Passer en plein écran')} title={t('Plein écran')} onClick={() => void toggleFullscreen()}>
             <Maximize size={16} />
@@ -734,9 +835,9 @@ export default function Reader({ book, collectionKind, previousChapter, nextChap
       {fullscreenError && <div className="reader-fullscreen-error" role="alert">{fullscreenError}</div>}
       {error && <div className="reader-fullscreen-error" role="alert">{t(error)}</div>}
       <div className="reader-body">
-        {book.format === 'PDF' && <PdfReader key={book.id} book={book} collectionKind={collectionKind} onClose={onClose} onProgress={reportProgress} />}
-        {book.format === 'CBZ' && <CbzReader key={book.id} book={book} collectionKind={collectionKind} onClose={onClose} onProgress={reportProgress} />}
-        {book.format === 'EPUB' && <EpubReader key={book.id} book={book} collectionKind={collectionKind} onClose={onClose} onProgress={reportProgress} />}
+        {book.format === 'PDF' && <PdfReader key={book.id} book={book} collectionKind={collectionKind} shortcuts={shortcuts} doublePage={doublePage} onClose={onClose} onProgress={reportProgress} />}
+        {book.format === 'CBZ' && <CbzReader key={book.id} book={book} collectionKind={collectionKind} shortcuts={shortcuts} doublePage={doublePage} onClose={onClose} onProgress={reportProgress} />}
+        {book.format === 'EPUB' && <EpubReader key={book.id} book={book} collectionKind={collectionKind} shortcuts={shortcuts} doublePage={doublePage} onClose={onClose} onProgress={reportProgress} />}
       </div>
     </section>
   )
